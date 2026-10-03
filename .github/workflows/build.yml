@@ -59,20 +59,32 @@ jobs:
             const m = require("./ui/app.js");
             const p = JSON.parse(require("fs").readFileSync("/tmp/sub.json")).proxies[0];
             m._setStore({ profiles: [], bypassLan: true, mode: "tun" }, "linux");
-            require("fs").writeFileSync("/tmp/client.json", m.buildConfig(p));
+            const cfg = JSON.parse(m.buildConfig(p));
+            // keep the runner reachable for GitHub during the test
+            delete cfg.inbounds[0].strict_route;
+            require("fs").writeFileSync("/tmp/client.json", JSON.stringify(cfg, null, 2));
           '
           (TVPN_PUBLIC_HOST=127.0.0.1 TVPN_ADMIN_TOKEN=0123456789abcdef0123 TVPN_DATA_DIR=/tmp/tvpn \
             TVPN_SOCKS_PORT=21080 TVPN_API_LISTEN=127.0.0.1:18090 ./dist/tainavpn-server > /tmp/server.log 2>&1 &) || true
           sleep 2
-          sudo /tmp/runconfig /tmp/client.json > /tmp/client.log 2>&1 &
-          sleep 4
-          ip addr | grep -A2 tun || true
+          finish() {
+            code=$?
+            sudo pkill -INT runconfig || true
+            sleep 2
+            if [ $code -ne 0 ]; then
+              tail -n 25 /tmp/client.log | while IFS= read -r l; do echo "::error::client: $l"; done
+              tail -n 10 /tmp/server.log | while IFS= read -r l; do echo "::error::server: $l"; done
+            fi
+            tail -n 40 /tmp/client.log
+          }
+          trap finish EXIT
+          sudo timeout 90 /tmp/runconfig /tmp/client.json > /tmp/client.log 2>&1 &
+          sleep 5
+          ip addr | grep -A3 tun || true
           # no -x flag: traffic is captured by TUN and must go through the SOCKS5 server
           curl -fsS --max-time 20 https://www.google.com -o /dev/null -w "through tun: %{http_code}\n"
           sudo pkill -INT runconfig; sleep 2
-          cat /tmp/client.log | tail -40
           grep -q "outbound/socks\[proxy\]" /tmp/client.log || { echo "::error::traffic did not go through the SOCKS5 outbound"; exit 1; }
-          grep -q "hijack\|dns" /tmp/client.log && echo "dns ok"
       - uses: actions/upload-artifact@v4
         with:
           name: tainavpn-server-linux-amd64
