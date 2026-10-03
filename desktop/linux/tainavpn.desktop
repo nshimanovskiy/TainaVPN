@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Tainavpn
+Comment=Весь трафик через SOCKS5-прокси
+Exec=@BIN@
+Icon=tainavpn
+Terminal=false
+Categories=Network;

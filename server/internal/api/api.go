@@ -1,0 +1,274 @@
+// Package api serves the client subscription API and the admin panel.
+package api
+
+import (
+	"crypto/subtle"
+	_ "embed"
+	"encoding/json"
+	"net"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/nshimanovskiy/tainavpn/server/internal/proxy"
+	"github.com/nshimanovskiy/tainavpn/server/internal/store"
+)
+
+//go:embed admin.html
+var adminHTML []byte
+
+type Config struct {
+	Name             string // shown in the app, e.g. "Tainavpn"
+	PublicHost       string // hostname/IP clients connect to for SOCKS
+	SocksPort        int
+	PublicURL        string // https://vpn.example.com (used to build subscription links)
+	AdminToken       string
+	AdminPath        string // e.g. /panel
+	OpenRegistration bool   // allow the app to obtain a key by itself
+	RegisterPerDay   int    // per-IP limit for self-registration
+}
+
+type API struct {
+	cfg   Config
+	store *store.Store
+	proxy *proxy.Server
+
+	rlMu sync.Mutex
+	rl   map[string][]time.Time
+}
+
+func New(cfg Config, st *store.Store, px *proxy.Server) *API {
+	if cfg.RegisterPerDay <= 0 {
+		cfg.RegisterPerDay = 3
+	}
+	return &API{cfg: cfg, store: st, proxy: px, rl: map[string][]time.Time{}}
+}
+
+func (a *API) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/info", a.info)
+	mux.HandleFunc("POST /api/v1/register", a.register)
+	mux.HandleFunc("GET /sub/{key}", a.subscription)
+	mux.HandleFunc("GET /api/admin/users", a.admin(a.listUsers))
+	mux.HandleFunc("POST /api/admin/users", a.admin(a.createUser))
+	mux.HandleFunc("DELETE /api/admin/users/{id}", a.admin(a.deleteUser))
+	mux.HandleFunc("POST /api/admin/users/{id}/disable", a.admin(a.setDisabled(true)))
+	mux.HandleFunc("POST /api/admin/users/{id}/enable", a.admin(a.setDisabled(false)))
+	mux.HandleFunc("POST /api/admin/users/{id}/rotate", a.admin(a.rotate))
+	mux.HandleFunc("GET /api/admin/status", a.admin(a.status))
+	adminPath := "/" + strings.Trim(a.cfg.AdminPath, "/")
+	mux.HandleFunc("GET "+adminPath, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Robots-Tag", "noindex")
+		_, _ = w.Write(adminHTML)
+	})
+	return cors(mux)
+}
+
+func cors(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// the apps load their UI from a local origin (file://, wails://), so allow any origin
+		// for the public client endpoints only
+		if strings.HasPrefix(r.URL.Path, "/sub/") || strings.HasPrefix(r.URL.Path, "/api/v1/") {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func errJSON(w http.ResponseWriter, code int, msg string) {
+	writeJSON(w, code, map[string]string{"error": msg})
+}
+
+func clientIP(r *http.Request) string {
+	if ip := r.Header.Get("X-Real-IP"); ip != "" {
+		return ip
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		return strings.TrimSpace(strings.Split(xff, ",")[0])
+	}
+	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	return host
+}
+
+func (a *API) baseURL(r *http.Request) string {
+	if a.cfg.PublicURL != "" {
+		return strings.TrimRight(a.cfg.PublicURL, "/")
+	}
+	scheme := "http"
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
+}
+
+func (a *API) info(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, map[string]any{
+		"name":              a.cfg.Name,
+		"open_registration": a.cfg.OpenRegistration,
+	})
+}
+
+func (a *API) allowRegister(ip string) bool {
+	a.rlMu.Lock()
+	defer a.rlMu.Unlock()
+	now := time.Now()
+	recent := a.rl[ip][:0]
+	for _, t := range a.rl[ip] {
+		if now.Sub(t) < 24*time.Hour {
+			recent = append(recent, t)
+		}
+	}
+	if len(recent) >= a.cfg.RegisterPerDay {
+		a.rl[ip] = recent
+		return false
+	}
+	a.rl[ip] = append(recent, now)
+	return true
+}
+
+func (a *API) register(w http.ResponseWriter, r *http.Request) {
+	if !a.cfg.OpenRegistration {
+		errJSON(w, 403, "registration is closed, ask the administrator for a key")
+		return
+	}
+	ip := clientIP(r)
+	if !a.allowRegister(ip) {
+		errJSON(w, 429, "too many registrations from this IP, try tomorrow")
+		return
+	}
+	var req struct {
+		Device string `json:"device"`
+	}
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req)
+	name := strings.TrimSpace(req.Device)
+	if len(name) > 64 {
+		name = name[:64]
+	}
+	if name == "" {
+		name = "app"
+	}
+	u, err := a.store.Create(name, "app")
+	if err != nil {
+		errJSON(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"key":              u.Key,
+		"subscription_url": a.baseURL(r) + "/sub/" + u.Key,
+	})
+}
+
+func (a *API) subscription(w http.ResponseWriter, r *http.Request) {
+	u, ok := a.store.ByKey(r.PathValue("key"), clientIP(r))
+	if !ok {
+		errJSON(w, 404, "unknown key")
+		return
+	}
+	if u.Disabled {
+		errJSON(w, 403, "key is disabled")
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"version": 1,
+		"name":    a.cfg.Name,
+		"proxies": []any{map[string]any{
+			"name":     a.cfg.Name,
+			"type":     "socks",
+			"server":   a.cfg.PublicHost,
+			"port":     a.cfg.SocksPort,
+			"username": u.Username,
+			"password": u.Password,
+		}},
+	})
+}
+
+func (a *API) admin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if a.cfg.AdminToken == "" || subtle.ConstantTimeCompare([]byte(token), []byte(a.cfg.AdminToken)) != 1 {
+			time.Sleep(500 * time.Millisecond)
+			errJSON(w, 401, "unauthorized")
+			return
+		}
+		next(w, r)
+	}
+}
+
+type userView struct {
+	store.User
+	SubscriptionURL string `json:"subscription_url"`
+}
+
+func (a *API) listUsers(w http.ResponseWriter, r *http.Request) {
+	list := []userView{}
+	for _, u := range a.store.List() {
+		list = append(list, userView{u, a.baseURL(r) + "/sub/" + u.Key})
+	}
+	writeJSON(w, 200, list)
+}
+
+func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req)
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = "user"
+	}
+	u, err := a.store.Create(name, "admin")
+	if err != nil {
+		errJSON(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, userView{u, a.baseURL(r) + "/sub/" + u.Key})
+}
+
+func (a *API) deleteUser(w http.ResponseWriter, r *http.Request) {
+	if err := a.store.Delete(r.PathValue("id")); err != nil {
+		errJSON(w, 404, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (a *API) setDisabled(disabled bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := a.store.SetDisabled(r.PathValue("id"), disabled); err != nil {
+			errJSON(w, 404, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	}
+}
+
+func (a *API) rotate(w http.ResponseWriter, r *http.Request) {
+	if err := a.store.RotatePassword(r.PathValue("id")); err != nil {
+		errJSON(w, 404, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (a *API) status(w http.ResponseWriter, r *http.Request) {
+	st := a.proxy.Status()
+	st["public_host"] = a.cfg.PublicHost
+	st["open_registration"] = a.cfg.OpenRegistration
+	writeJSON(w, 200, st)
+}

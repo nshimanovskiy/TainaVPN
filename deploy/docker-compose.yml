@@ -1,0 +1,12 @@
+services:
+  tainavpn:
+    build: .
+    image: tainavpn-server:latest
+    container_name: tainavpn
+    restart: unless-stopped
+    # host network: SOCKS5 UDP ASSOCIATE needs the real public address,
+    # the API listens on 127.0.0.1 only and is published through nginx
+    network_mode: host
+    env_file: .env
+    volumes:
+      - ./data:/data

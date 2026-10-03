@@ -1,0 +1,12 @@
+dist/
+deploy/tainavpn-server
+deploy/.env
+deploy/data/
+android/.gradle/
+android/build/
+android/app/build/
+android/app/libs/*.aar
+android/local.properties
+desktop/*.syso
+*.iml
+.idea/
