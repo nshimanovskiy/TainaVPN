@@ -20,7 +20,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	logs := core.NewLogBuffer(1000)
+	logs := core.NewLogBuffer(10)
+	logs.Echo = func(line string) { fmt.Println(line) }
 	inst, err := core.Start(string(data), nil, logs)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "start:", err)
@@ -31,5 +32,5 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 	_ = inst.Close()
-	fmt.Println(logs.String())
+	fmt.Println("stopped")
 }

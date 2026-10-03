@@ -70,6 +70,8 @@ type LogBuffer struct {
 	mu    sync.Mutex
 	lines []string
 	max   int
+	// Echo, if set, receives every line as it arrives (used by CLI tools).
+	Echo func(string)
 }
 
 func NewLogBuffer(max int) *LogBuffer { return &LogBuffer{max: max} }
@@ -79,6 +81,9 @@ func (l *LogBuffer) WriteMessage(level log.Level, message string) {
 }
 
 func (l *LogBuffer) Add(message string) {
+	if l.Echo != nil {
+		l.Echo(strings.TrimRight(message, "\n"))
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.lines = append(l.lines, strings.TrimRight(message, "\n"))
