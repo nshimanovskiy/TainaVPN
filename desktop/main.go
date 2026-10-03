@@ -89,7 +89,7 @@ func (a *App) Start(config string) error {
 	a.logs.Clear()
 	a.state = "starting"
 	_ = os.WriteFile(filepath.Join(a.dir, "last-config.json"), []byte(config), 0o600)
-	inst, err := core.Start(config, nil, a.logs)
+	inst, err := core.Start(config, filepath.Join(a.dir, "core"), nil, a.logs)
 	if err != nil {
 		a.state = "stopped"
 		a.lastErr = humanError(err.Error())

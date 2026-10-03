@@ -25,7 +25,8 @@ var (
 )
 
 // Start launches sing-box with the given JSON config.
-func Start(config string, host Host) error {
+// dataDir is the app's private files directory.
+func Start(config string, dataDir string, host Host) error {
 	mu.Lock()
 	defer mu.Unlock()
 	if instance != nil {
@@ -33,7 +34,7 @@ func Start(config string, host Host) error {
 		instance = nil
 	}
 	logs.Clear()
-	i, err := core.Start(config, &platform{host: host}, logs)
+	i, err := core.Start(config, dataDir, &platform{host: host}, logs)
 	if err != nil {
 		logs.Add("ERROR: " + err.Error())
 		return err

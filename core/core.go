@@ -4,6 +4,7 @@ package core
 
 import (
 	"context"
+	"os"
 	"strings"
 	"sync"
 
@@ -16,6 +17,7 @@ import (
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
+	"github.com/sagernet/sing/service/filemanager"
 )
 
 // Version of the embedded sing-box core.
@@ -28,8 +30,13 @@ type Instance struct {
 }
 
 // Start parses config and starts sing-box. platform may be nil (desktop/server).
-func Start(config string, platform adapter.PlatformInterface, logs *LogBuffer) (*Instance, error) {
-	ctx, cancel := context.WithCancel(include.Context(context.Background()))
+// dataDir is where sing-box keeps its files (cache.db).
+func Start(config string, dataDir string, platform adapter.PlatformInterface, logs *LogBuffer) (*Instance, error) {
+	if dataDir != "" {
+		_ = os.MkdirAll(dataDir, 0o700)
+	}
+	base := filemanager.WithDefault(context.Background(), dataDir, "", os.Getuid(), os.Getgid())
+	ctx, cancel := context.WithCancel(include.Context(base))
 	if platform != nil {
 		ctx = service.ContextWith[adapter.PlatformInterface](ctx, platform)
 	}

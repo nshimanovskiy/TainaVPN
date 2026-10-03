@@ -11,6 +11,8 @@ env:
   GO_VERSION: "1.25.x"
   SINGBOX_VERSION: "1.14.2"
   CORE_TAGS: "with_gvisor,badlinkname,tfogo_checklinkname0"
+  # last golang.org/x/mobile commit that still supports Go 1.25
+  XMOBILE: "1960c775504c"
 
 jobs:
   server:
@@ -168,12 +170,12 @@ jobs:
           set -o pipefail
           go version | tee -a "$RUNNER_TEMP/out.log"
           go mod tidy 2>&1 | tee -a "$RUNNER_TEMP/out.log"
-          go get golang.org/x/mobile/bind@latest 2>&1 | tee -a "$RUNNER_TEMP/out.log"
+          go get golang.org/x/mobile/bind@${XMOBILE} 2>&1 | tee -a "$RUNNER_TEMP/out.log"
       - name: Install gomobile
         run: |
           set -o pipefail
-          go install golang.org/x/mobile/cmd/gomobile@latest 2>&1 | tee -a "$RUNNER_TEMP/out.log"
-          go install golang.org/x/mobile/cmd/gobind@latest 2>&1 | tee -a "$RUNNER_TEMP/out.log"
+          go install golang.org/x/mobile/cmd/gomobile@${XMOBILE} 2>&1 | tee -a "$RUNNER_TEMP/out.log"
+          go install golang.org/x/mobile/cmd/gobind@${XMOBILE} 2>&1 | tee -a "$RUNNER_TEMP/out.log"
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
       - name: Build Go library (AAR)
         env:

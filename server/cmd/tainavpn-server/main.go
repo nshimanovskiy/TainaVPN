@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -63,11 +64,12 @@ func main() {
 		log.Fatal("TVPN_ADMIN_TOKEN must be at least 16 characters")
 	}
 
-	st, err := store.Open(env("TVPN_DATA_DIR", "/data"))
+	dataDir := env("TVPN_DATA_DIR", "/data")
+	st, err := store.Open(dataDir)
 	if err != nil {
 		log.Fatalf("open store: %v", err)
 	}
-	px := proxy.New(env("TVPN_SOCKS_LISTEN", "::"), cfg.SocksPort, st)
+	px := proxy.New(env("TVPN_SOCKS_LISTEN", "::"), cfg.SocksPort, st, filepath.Join(dataDir, "core"))
 	st.OnChange(px.Reload)
 	_ = px.Start()
 

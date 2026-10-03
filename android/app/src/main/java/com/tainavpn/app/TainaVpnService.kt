@@ -89,7 +89,7 @@ class TainaVpnService : VpnService() {
         worker.execute {
             try {
                 val config = configFile(this).readText()
-                Tainacore.start(config, host)
+                Tainacore.start(config, File(filesDir, "core").absolutePath, host)
                 VpnState.state = "running"
             } catch (e: Exception) {
                 Log.e(TAG, "start failed", e)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/nshimanovskiy/tainavpn/core"
@@ -22,7 +23,7 @@ func main() {
 	}
 	logs := core.NewLogBuffer(10)
 	logs.Echo = func(line string) { fmt.Println(line) }
-	inst, err := core.Start(string(data), nil, logs)
+	inst, err := core.Start(string(data), filepath.Join(os.TempDir(), "runconfig-core"), nil, logs)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "start:", err)
 		os.Exit(1)

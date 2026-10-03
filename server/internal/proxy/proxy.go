@@ -20,10 +20,11 @@ type Server struct {
 	timer    *time.Timer
 	logs     *core.LogBuffer
 	lastErr  string
+	dataDir  string
 }
 
-func New(listen string, port int, st *store.Store) *Server {
-	return &Server{listen: listen, port: port, store: st, logs: core.NewLogBuffer(200)}
+func New(listen string, port int, st *store.Store, dataDir string) *Server {
+	return &Server{listen: listen, port: port, store: st, logs: core.NewLogBuffer(200), dataDir: dataDir}
 }
 
 // BuildConfig renders the sing-box server config.
@@ -101,7 +102,7 @@ func (s *Server) restart() {
 		log.Printf("sing-box: no active users, SOCKS server is not listening")
 		return
 	}
-	inst, err := core.Start(config, nil, s.logs)
+	inst, err := core.Start(config, s.dataDir, nil, s.logs)
 	if err != nil {
 		s.lastErr = err.Error()
 		log.Printf("sing-box start failed: %v", err)
