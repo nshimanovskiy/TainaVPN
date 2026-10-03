@@ -24,7 +24,7 @@ jobs:
       - name: Resolve modules
         run: go mod tidy
       - name: Vet
-        run: go vet ./core/... ./server/... ./ui/... ./mobile/...
+        run: go vet ./core/... ./server/... ./ui/... ./mobile/... ./tools/...
       - name: Build server
         env:
           CGO_ENABLED: "0"
@@ -50,7 +50,29 @@ jobs:
           curl -fsS --max-time 20 -x "socks5h://$U@127.0.0.1:21080" https://www.google.com -o /dev/null -w "via socks: %{http_code}\n"
           if curl -s --max-time 5 -x "socks5h://bad:creds@127.0.0.1:21080" https://www.google.com -o /dev/null; then echo "auth not enforced!"; exit 1; fi
           curl -fsS -H "Authorization: Bearer 0123456789abcdef0123" http://127.0.0.1:18090/api/admin/users
-          kill %1
+          echo "$CFG" > /tmp/sub.json
+      - name: End-to-end test of the client config (TUN -> SOCKS5 server)
+        timeout-minutes: 3
+        run: |
+          go build -tags "${CORE_TAGS}" -ldflags "-checklinkname=0 -X github.com/sagernet/sing-box/constant.Version=${SINGBOX_VERSION}" -o /tmp/runconfig ./tools/runconfig
+          node -e '
+            const m = require("./ui/app.js");
+            const p = JSON.parse(require("fs").readFileSync("/tmp/sub.json")).proxies[0];
+            m._setStore({ profiles: [], bypassLan: true, mode: "tun" }, "linux");
+            require("fs").writeFileSync("/tmp/client.json", m.buildConfig(p));
+          '
+          (TVPN_PUBLIC_HOST=127.0.0.1 TVPN_ADMIN_TOKEN=0123456789abcdef0123 TVPN_DATA_DIR=/tmp/tvpn \
+            TVPN_SOCKS_PORT=21080 TVPN_API_LISTEN=127.0.0.1:18090 ./dist/tainavpn-server > /tmp/server.log 2>&1 &) || true
+          sleep 2
+          sudo /tmp/runconfig /tmp/client.json > /tmp/client.log 2>&1 &
+          sleep 4
+          ip addr | grep -A2 tun || true
+          # no -x flag: traffic is captured by TUN and must go through the SOCKS5 server
+          curl -fsS --max-time 20 https://www.google.com -o /dev/null -w "through tun: %{http_code}\n"
+          sudo pkill -INT runconfig; sleep 2
+          cat /tmp/client.log | tail -40
+          grep -q "outbound/socks\[proxy\]" /tmp/client.log || { echo "::error::traffic did not go through the SOCKS5 outbound"; exit 1; }
+          grep -q "hijack\|dns" /tmp/client.log && echo "dns ok"
       - uses: actions/upload-artifact@v4
         with:
           name: tainavpn-server-linux-amd64
