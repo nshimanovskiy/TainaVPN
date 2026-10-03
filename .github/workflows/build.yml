@@ -154,21 +154,25 @@ jobs:
           java-version: "17"
       - name: Resolve modules
         run: |
-          go mod tidy
-          go get golang.org/x/mobile/bind@latest
+          set -o pipefail
+          go version | tee -a "$RUNNER_TEMP/out.log"
+          go mod tidy 2>&1 | tee -a "$RUNNER_TEMP/out.log"
+          go get golang.org/x/mobile/bind@latest 2>&1 | tee -a "$RUNNER_TEMP/out.log"
       - name: Install gomobile
         run: |
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          go install golang.org/x/mobile/cmd/gobind@latest
+          set -o pipefail
+          go install golang.org/x/mobile/cmd/gomobile@latest 2>&1 | tee -a "$RUNNER_TEMP/out.log"
+          go install golang.org/x/mobile/cmd/gobind@latest 2>&1 | tee -a "$RUNNER_TEMP/out.log"
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
       - name: Build Go library (AAR)
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
         run: |
+          set -o pipefail
           gomobile bind -v -target=android/arm64,android/arm,android/amd64 -androidapi 24 \
             -javapkg com.tainavpn -tags "${CORE_TAGS}" -trimpath \
             -ldflags "-s -w -checklinkname=0 -X github.com/sagernet/sing-box/constant.Version=${SINGBOX_VERSION}" \
-            -o android/app/libs/tainacore.aar ./mobile
+            -o android/app/libs/tainacore.aar ./mobile 2>&1 | tee -a "$RUNNER_TEMP/out.log"
           ls -la android/app/libs
       - uses: gradle/actions/setup-gradle@v4
         with:
@@ -198,10 +202,11 @@ jobs:
             cp "$f" "dist/$n"
           done
           ls -la dist
-      - name: Report Gradle errors
+      - name: Report errors
         if: failure()
         run: |
-          grep -E "^e: |error:|FAILURE|What went wrong" -A3 "$RUNNER_TEMP/gradle.log" | head -40 | while IFS= read -r l; do echo "::error::$l"; done || true
+          tail -n 30 "$RUNNER_TEMP/out.log" 2>/dev/null | while IFS= read -r l; do echo "::error::$l"; done || true
+          grep -E "^e: |error:|FAILURE|What went wrong" -A3 "$RUNNER_TEMP/gradle.log" 2>/dev/null | head -40 | while IFS= read -r l; do echo "::error::$l"; done || true
       - uses: actions/upload-artifact@v4
         with:
           name: tainavpn-android
