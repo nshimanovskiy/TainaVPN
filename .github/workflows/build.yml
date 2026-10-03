@@ -72,8 +72,7 @@ jobs:
             sudo pkill -INT runconfig || true
             sleep 2
             if [ $code -ne 0 ]; then
-              tail -n 25 /tmp/client.log | while IFS= read -r l; do echo "::error::client: $l"; done
-              tail -n 10 /tmp/server.log | while IFS= read -r l; do echo "::error::server: $l"; done
+              echo "::error::client log:%0A$(head -c 6000 /tmp/client.log | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')"
             fi
             tail -n 40 /tmp/client.log
           }
@@ -217,7 +216,7 @@ jobs:
       - name: Report errors
         if: failure()
         run: |
-          tail -n 30 "$RUNNER_TEMP/out.log" 2>/dev/null | while IFS= read -r l; do echo "::error::$l"; done || true
+          grep -v "go: downloading\|go: finding\|go: found\|^go: upgraded\|^go: added" "$RUNNER_TEMP/out.log" 2>/dev/null | tail -n 30 | while IFS= read -r l; do echo "::error::$l"; done || true
           grep -E "^e: |error:|FAILURE|What went wrong" -A3 "$RUNNER_TEMP/gradle.log" 2>/dev/null | head -40 | while IFS= read -r l; do echo "::error::$l"; done || true
       - uses: actions/upload-artifact@v4
         with:
