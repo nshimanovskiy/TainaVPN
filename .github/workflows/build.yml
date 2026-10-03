@@ -64,10 +64,16 @@ jobs:
             const cfg = JSON.parse(m.buildConfig(p));
             // keep the runner reachable for GitHub during the test
             delete cfg.inbounds[0].strict_route;
+            cfg.inbounds[0].exclude_uid = [65534];
             require("fs").writeFileSync("/tmp/client.json", JSON.stringify(cfg, null, 2));
           '
-          (TVPN_PUBLIC_HOST=127.0.0.1 TVPN_ADMIN_TOKEN=0123456789abcdef0123 TVPN_DATA_DIR=/tmp/tvpn \
-            TVPN_SOCKS_PORT=21080 TVPN_API_LISTEN=127.0.0.1:18090 ./dist/tainavpn-server > /tmp/server.log 2>&1 &) || true
+          # client and server share this machine: run the server as "nobody" and keep that user out of the TUN,
+          # otherwise the server's own outgoing traffic would loop back into the client
+          pkill -f tainavpn-server || true
+          sleep 1
+          sudo chown -R nobody /tmp/tvpn
+          (sudo -u nobody env TVPN_PUBLIC_HOST=127.0.0.1 TVPN_ADMIN_TOKEN=0123456789abcdef0123 TVPN_DATA_DIR=/tmp/tvpn \
+            TVPN_SOCKS_PORT=21080 TVPN_API_LISTEN=127.0.0.1:18090 ./dist/tainavpn-server > /tmp/server.log 2>&1 &)
           sleep 2
           finish() {
             code=$?
