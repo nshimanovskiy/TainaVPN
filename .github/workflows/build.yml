@@ -291,8 +291,10 @@ jobs:
         run: |
           sudo apt-get install -y "./dist/tainavpn_${VERSION}_amd64.deb"
           getcap /usr/bin/tainavpn | grep -q cap_net_admin
-          test -f /usr/share/polkit-1/rules.d/50-tainavpn.rules
-          test -f /var/lib/polkit-1/localauthority/10-vendor.d/tainavpn.pkla
+          # polkit directories are root-only
+          sudo test -f /usr/share/polkit-1/rules.d/50-tainavpn.rules
+          sudo test -f /var/lib/polkit-1/localauthority/10-vendor.d/tainavpn.pkla
+          dpkg -L tainavpn
           test -f /usr/share/applications/tainavpn.desktop
           echo "installed ok"
       - uses: actions/upload-artifact@v4
