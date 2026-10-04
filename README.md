@@ -40,12 +40,17 @@
 
 ### Первый запуск через GitHub Actions
 
+Вход под root не нужен: деплой заходит по SSH под обычным пользователем.
+
 1. В **Settings → Secrets and variables → Actions** добавьте секреты:
-   `VPS_HOST`, `VPS_PORT` (ваш нестандартный SSH‑порт), `VPS_USER` (не root, должен быть в группе `docker`), `VPS_SSH_KEY` (приватный ключ).
-2. На VPS один раз: `sudo mkdir -p /opt/tainavpn && sudo chown $USER /opt/tainavpn`.
+   `VPS_HOST`, `VPS_PORT` (ваш SSH‑порт), `VPS_USER` (обычный пользователь), `VPS_SSH_KEY` (приватный ключ, публичный — в `~/.ssh/authorized_keys` этого пользователя).
+2. Один раз на сервере дайте этому пользователю доступ к Docker: `sudo usermod -aG docker <пользователь>` и перезайдите.
+   (Либо sudo без пароля для docker — деплой сам попробует `sudo -n docker`.)
 3. **Actions → Deploy server → Run workflow** (в поле укажите домен, по умолчанию `vpn.sdsds.top`).
-   При первом деплое на сервере создаётся `/opt/tainavpn/.env` со случайным `TVPN_ADMIN_TOKEN` — посмотреть: `grep ADMIN_TOKEN /opt/tainavpn/.env`.
-4. Nginx (существующие сайты не трогаются): скопируйте `deploy/nginx-vpn.conf` в `/etc/nginx/sites-available/vpn.sdsds.top`,
+   Файлы ложатся в `~/tainavpn` пользователя деплоя — права root для этого не нужны
+   (другую папку можно задать переменной репозитория `VPS_DIR`).
+   При первом деплое создаётся `~/tainavpn/.env` со случайным `TVPN_ADMIN_TOKEN` — посмотреть: `grep ADMIN_TOKEN ~/tainavpn/.env`.
+4. Nginx (существующие сайты не трогаются, тут один раз нужен sudo): скопируйте `deploy/nginx-vpn.conf` в `/etc/nginx/sites-available/vpn.sdsds.top`,
    включите (`ln -s … /etc/nginx/sites-enabled/`), `sudo nginx -t && sudo systemctl reload nginx`, затем `sudo certbot --nginx -d vpn.sdsds.top`.
    Не забудьте A‑запись `vpn.sdsds.top` → IP VPS.
 5. Порт SOCKS5 `1080` (TCP и UDP) должен быть доступен снаружи. Фаервол не трогаем — если он выключен, ничего делать не нужно.

@@ -12,7 +12,9 @@ on:
 env:
   GO_VERSION: "1.25.x"
   SINGBOX_VERSION: "1.14.2"
-  REMOTE_DIR: /opt/tainavpn
+  # папка на сервере; по умолчанию в домашней папке пользователя деплоя (root и sudo не нужны).
+  # Можно переопределить переменной репозитория VPS_DIR (Settings → Variables).
+  REMOTE_DIR: ${{ vars.VPS_DIR || '~/tainavpn' }}
 
 jobs:
   deploy:
@@ -48,8 +50,10 @@ jobs:
           USER: ${{ secrets.VPS_USER }}
         run: |
           SSH="ssh -i ~/.ssh/id_deploy -p ${PORT:-22}"
-          $SSH "$USER@$HOST" "mkdir -p $REMOTE_DIR/data"
-          scp -i ~/.ssh/id_deploy -P "${PORT:-22}" deploy/tainavpn-server deploy/Dockerfile deploy/docker-compose.yml deploy/.env.example "$USER@$HOST:$REMOTE_DIR/"
+          # resolve ~ on the server side
+          DIR=$($SSH "$USER@$HOST" "mkdir -p $REMOTE_DIR/data && cd $REMOTE_DIR && pwd")
+          echo "REMOTE_ABS=$DIR" >> $GITHUB_ENV
+          scp -i ~/.ssh/id_deploy -P "${PORT:-22}" deploy/tainavpn-server deploy/Dockerfile deploy/docker-compose.yml deploy/.env.example "$USER@$HOST:$DIR/"
       - name: Restart
         env:
           HOST: ${{ secrets.VPS_HOST }}
@@ -57,20 +61,29 @@ jobs:
           USER: ${{ secrets.VPS_USER }}
           PUBLIC_HOST: ${{ inputs.public_host }}
         run: |
-          ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" "$USER@$HOST" PUBLIC_HOST="$PUBLIC_HOST" REMOTE_DIR="$REMOTE_DIR" 'bash -s' <<'EOS'
+          ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" "$USER@$HOST" PUBLIC_HOST="$PUBLIC_HOST" REMOTE_DIR="$REMOTE_ABS" 'bash -s' <<'EOS'
           set -e
           cd "$REMOTE_DIR"
+          # docker without root: either the user is in the "docker" group, or has passwordless sudo for docker
+          if docker info >/dev/null 2>&1; then
+            DOCKER="docker"
+          elif sudo -n docker info >/dev/null 2>&1; then
+            DOCKER="sudo -n docker"
+          else
+            echo "::error::Пользователь $(whoami) не может запускать docker. Один раз на сервере: sudo usermod -aG docker $(whoami)  (затем перелогиниться)"
+            exit 1
+          fi
           if [ ! -f .env ]; then
             TOKEN=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
             sed -e "s|^TVPN_PUBLIC_HOST=.*|TVPN_PUBLIC_HOST=$PUBLIC_HOST|" \
                 -e "s|^TVPN_PUBLIC_URL=.*|TVPN_PUBLIC_URL=https://$PUBLIC_HOST|" \
                 -e "s|^TVPN_ADMIN_TOKEN=.*|TVPN_ADMIN_TOKEN=$TOKEN|" .env.example > .env
             chmod 600 .env
-            echo "::notice::Создан $REMOTE_DIR/.env. Токен админки: ssh на сервер и 'grep ADMIN_TOKEN $REMOTE_DIR/.env'"
+            echo "::notice::Создан $REMOTE_DIR/.env. Токен админки: grep ADMIN_TOKEN $REMOTE_DIR/.env"
           fi
-          docker compose up -d --build
+          $DOCKER compose up -d --build
           sleep 3
-          docker compose ps
-          docker compose logs --tail 20
+          $DOCKER compose ps
+          $DOCKER compose logs --tail 20
           curl -fsS http://127.0.0.1:$(grep -oP '^TVPN_API_LISTEN=.*:\K\d+' .env || echo 8090)/api/v1/info
           EOS
