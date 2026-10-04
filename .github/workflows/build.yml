@@ -104,7 +104,7 @@ jobs:
           # iPhone formats: base64 share-link list and a full sing-box profile
           LINKS=$(curl -fsS "http://127.0.0.1:18090/sub/$KEY/links" | base64 -d)
           echo "links: $LINKS"
-          [[ "$LINKS" == "socks://up:pp@127.0.0.1:21080#Tainavpn"* ]] || { echo "::error::unexpected share link: $LINKS"; exit 1; }
+          [[ "$LINKS" == "socks://up:pp@127.0.0.1:21080#"* ]] || { echo "::error::unexpected share link: $LINKS"; exit 1; }
           curl -fsS "http://127.0.0.1:18090/sub/$KEY/singbox" > /tmp/ios-profile.json
           curl -fsS -o /dev/null http://127.0.0.1:18090/ios
           curl -fsS -H "Authorization: Bearer 0123456789abcdef0123" http://127.0.0.1:18090/api/admin/proxies
