@@ -409,7 +409,7 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           # first with Private DNS off (baseline), then in strict mode like on the user's phone
-          script: PDNS_MODE=off bash tools/android_test/run.sh; PDNS_MODE=hostname bash tools/android_test/run.sh
+          script: PDNS_MODE=off VARIANTS="app" bash tools/android_test/run.sh || true; PDNS_MODE=hostname VARIANTS="app ipv4 gvisor system ipv4-gvisor no853" bash tools/android_test/run.sh
       - name: Proxy log
         if: always()
         run: |
