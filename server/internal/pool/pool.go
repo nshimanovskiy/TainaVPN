@@ -7,6 +7,7 @@
 //	socks5://user:pass@host:port   SOCKS5
 //	http://user:pass@host:port     HTTP CONNECT proxy
 //	host:port:user:pass            SOCKS5, alternative notation
+//	user:pass@host:port DE         country set manually (otherwise detected by exit IP)
 //	# comment
 package pool
 
@@ -15,6 +16,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -30,17 +32,19 @@ import (
 )
 
 type Proxy struct {
-	ID        string    `json:"id"`
-	Type      string    `json:"type"` // "socks" or "http"
-	Host      string    `json:"host"`
-	Port      int       `json:"port"`
-	Username  string    `json:"username,omitempty"`
-	Password  string    `json:"password,omitempty"`
-	File      string    `json:"file"`
-	Line      int       `json:"line"`
-	Alive     bool      `json:"alive"`
-	CheckedAt time.Time `json:"checked_at,omitempty"`
-	Error     string    `json:"error,omitempty"`
+	ID         string    `json:"id"`
+	Type       string    `json:"type"` // "socks" or "http"
+	Host       string    `json:"host"`
+	Port       int       `json:"port"`
+	Username   string    `json:"username,omitempty"`
+	Password   string    `json:"password,omitempty"`
+	File       string    `json:"file"`
+	Line       int       `json:"line"`
+	Country    string    `json:"country,omitempty"`        // ISO code, "" if unknown
+	CountrySet bool      `json:"country_manual,omitempty"` // set in the file, not detected
+	Alive      bool      `json:"alive"`
+	CheckedAt  time.Time `json:"checked_at,omitempty"`
+	Error      string    `json:"error,omitempty"`
 }
 
 // Usable reports whether the proxy may be handed out (alive or not checked yet).
@@ -49,7 +53,10 @@ func (p Proxy) Usable() bool { return p.Alive || p.CheckedAt.IsZero() }
 func (p Proxy) Addr() string { return net.JoinHostPort(p.Host, strconv.Itoa(p.Port)) }
 
 type Pool struct {
-	dir string
+	dir     string
+	geoPath string
+	geoMu   sync.Mutex
+	geo     map[string]geoEntry
 
 	mu       sync.RWMutex
 	proxies  []*Proxy
@@ -61,8 +68,27 @@ type Pool struct {
 	checkNow chan struct{}
 }
 
-func New(dir string) *Pool {
-	return &Pool{dir: dir, byID: map[string]*Proxy{}, checkNow: make(chan struct{}, 1)}
+type geoEntry struct {
+	Country string    `json:"country"`
+	At      time.Time `json:"at"`
+}
+
+// New creates a pool reading dir; detected countries are cached in geoPath.
+func New(dir, geoPath string) *Pool {
+	p := &Pool{dir: dir, geoPath: geoPath, geo: map[string]geoEntry{}, byID: map[string]*Proxy{}, checkNow: make(chan struct{}, 1)}
+	if data, err := os.ReadFile(geoPath); err == nil {
+		_ = json.Unmarshal(data, &p.geo)
+	}
+	return p
+}
+
+func (p *Pool) saveGeo() {
+	p.geoMu.Lock()
+	data, _ := json.MarshalIndent(p.geo, "", "  ")
+	p.geoMu.Unlock()
+	if p.geoPath != "" {
+		_ = os.WriteFile(p.geoPath, data, 0o600)
+	}
 }
 
 func (p *Pool) Dir() string { return p.dir }
@@ -157,11 +183,16 @@ func (p *Pool) reload() bool {
 	}
 	p.mu.Lock()
 	// keep health state of proxies that are still present
+	p.geoMu.Lock()
 	for _, px := range list {
 		if old := p.byID[px.ID]; old != nil {
 			px.Alive, px.CheckedAt, px.Error = old.Alive, old.CheckedAt, old.Error
 		}
+		if !px.CountrySet {
+			px.Country = p.geo[px.ID].Country
+		}
 	}
+	p.geoMu.Unlock()
 	byID := map[string]*Proxy{}
 	for _, px := range list {
 		byID[px.ID] = px
@@ -183,8 +214,9 @@ func (p *Pool) checkAll() {
 	}
 	p.mu.RUnlock()
 
-	sem := make(chan struct{}, 16)
+	sem := make(chan struct{}, 8)
 	var wg sync.WaitGroup
+	geoChanged := false
 	for _, px := range list {
 		wg.Add(1)
 		sem <- struct{}{}
@@ -192,6 +224,18 @@ func (p *Pool) checkAll() {
 			defer wg.Done()
 			defer func() { <-sem }()
 			err := Check(px, 8*time.Second)
+			country := ""
+			if err == nil && !px.CountrySet && p.needGeo(px.ID) {
+				if c, gerr := DetectCountry(px, 15*time.Second); gerr == nil {
+					country = c
+					p.geoMu.Lock()
+					p.geo[px.ID] = geoEntry{Country: c, At: time.Now()}
+					geoChanged = true
+					p.geoMu.Unlock()
+				} else {
+					log.Printf("pool: country of %s: %v", px.Addr(), gerr)
+				}
+			}
 			p.mu.Lock()
 			if cur := p.byID[px.ID]; cur != nil {
 				cur.CheckedAt = time.Now()
@@ -200,11 +244,28 @@ func (p *Pool) checkAll() {
 				if err != nil {
 					cur.Error = err.Error()
 				}
+				if country != "" {
+					cur.Country = country
+				}
 			}
 			p.mu.Unlock()
 		}(px)
 	}
 	wg.Wait()
+	p.geoMu.Lock()
+	changed := geoChanged
+	p.geoMu.Unlock()
+	if changed {
+		p.saveGeo()
+	}
+}
+
+// needGeo reports whether the proxy's country is unknown or older than a day.
+func (p *Pool) needGeo(id string) bool {
+	p.geoMu.Lock()
+	defer p.geoMu.Unlock()
+	e, ok := p.geo[id]
+	return !ok || e.Country == "" || time.Since(e.At) > 24*time.Hour
 }
 
 func (p *Pool) List() []Proxy {
@@ -232,15 +293,37 @@ func (p *Pool) Get(id string) (Proxy, bool) {
 	return Proxy{}, false
 }
 
-// Pick returns the least loaded usable proxy (load = number of users per proxy ID).
-// If no proxy is usable, it falls back to the least loaded proxy of all.
-func (p *Pool) Pick(load map[string]int, exclude string) (Proxy, bool) {
+// Countries returns the distinct countries of usable proxies, sorted ("" = unknown, last).
+func (p *Pool) Countries() []string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	seen := map[string]bool{}
+	var out []string
+	for _, px := range p.proxies {
+		if px.Usable() && !seen[px.Country] {
+			seen[px.Country] = true
+			out = append(out, px.Country)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if (out[i] == "") != (out[j] == "") {
+			return out[j] == ""
+		}
+		return CountryName(out[i]) < CountryName(out[j])
+	})
+	return out
+}
+
+// Pick returns the least loaded usable proxy of the given country
+// (load = number of users per proxy ID). If none is usable it falls back to
+// the least loaded proxy of that country.
+func (p *Pool) Pick(country string, load map[string]int, exclude string) (Proxy, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	pick := func(usableOnly bool) *Proxy {
 		var best *Proxy
 		for _, px := range p.proxies {
-			if px.ID == exclude || (usableOnly && !px.Usable()) {
+			if px.Country != country || px.ID == exclude || (usableOnly && !px.Usable()) {
 				continue
 			}
 			if best == nil || load[px.ID] < load[best.ID] {
@@ -254,7 +337,7 @@ func (p *Pool) Pick(load map[string]int, exclude string) (Proxy, bool) {
 		best = pick(false)
 	}
 	if best == nil && exclude != "" {
-		if px := p.byID[exclude]; px != nil {
+		if px := p.byID[exclude]; px != nil && px.Country == country {
 			best = px
 		}
 	}
@@ -267,6 +350,15 @@ func (p *Pool) Pick(load map[string]int, exclude string) (Proxy, bool) {
 // Parse parses one proxy line.
 func Parse(line string) (*Proxy, error) {
 	s := strings.TrimSpace(line)
+	country := ""
+	if i := strings.Index(s, " #"); i >= 0 { // trailing comment
+		s = strings.TrimSpace(s[:i])
+	}
+	if f := strings.Fields(s); len(f) == 2 && len(f[1]) == 2 && isLetters(f[1]) {
+		s, country = f[0], strings.ToUpper(f[1])
+	} else if len(f) > 1 {
+		return nil, fmt.Errorf("unexpected text after the proxy")
+	}
 	typ := "socks"
 	if i := strings.Index(s, "://"); i >= 0 {
 		switch strings.ToLower(s[:i]) {
@@ -309,7 +401,7 @@ func Parse(line string) (*Proxy, error) {
 	if err != nil || port <= 0 || port > 65535 || host == "" {
 		return nil, fmt.Errorf("bad host or port")
 	}
-	px := &Proxy{Type: typ, Host: host, Port: port, Username: user, Password: pass}
+	px := &Proxy{Type: typ, Host: host, Port: port, Username: user, Password: pass, Country: country, CountrySet: country != ""}
 	h := sha1.Sum([]byte(typ + "|" + host + "|" + portStr + "|" + user + "|" + pass))
 	px.ID = hex.EncodeToString(h[:6])
 	return px, nil
@@ -326,6 +418,11 @@ func Check(px Proxy, timeout time.Duration) error {
 	if px.Type == "http" {
 		return nil // reachable is enough for HTTP proxies
 	}
+	return socksAuth(conn, px)
+}
+
+// socksAuth performs the SOCKS5 greeting and username/password authentication.
+func socksAuth(conn net.Conn, px Proxy) error {
 	method := byte(0x00)
 	if px.Username != "" {
 		method = 0x02
@@ -359,4 +456,38 @@ func Check(px Proxy, timeout time.Duration) error {
 		}
 	}
 	return nil
+}
+
+func isLetters(s string) bool {
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z') {
+			return false
+		}
+	}
+	return true
+}
+
+// CountryName returns the Russian name of an ISO country code.
+func CountryName(code string) string {
+	if n, ok := countryNames[strings.ToUpper(code)]; ok {
+		return n
+	}
+	return ""
+}
+
+// Flag returns the emoji flag for an ISO country code.
+func Flag(code string) string {
+	code = strings.ToUpper(code)
+	if len(code) != 2 || !isLetters(code) {
+		return "🌐"
+	}
+	return string(rune(0x1F1E6+rune(code[0]-'A'))) + string(rune(0x1F1E6+rune(code[1]-'A')))
+}
+
+// Label is "🇩🇪 Германия" (or "🌐 <fallback>" when the country is unknown).
+func Label(code, fallback string) string {
+	if n := CountryName(code); n != "" {
+		return Flag(code) + " " + n
+	}
+	return "🌐 " + fallback
 }

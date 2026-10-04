@@ -65,7 +65,7 @@ func main() {
 		log.Fatalf("open store: %v", err)
 	}
 	// upstream proxies are read from text files in this folder (one user:pass@host:port per line)
-	pl := pool.New(env("TVPN_PROXIES_DIR", filepath.Join(dataDir, "proxies")))
+	pl := pool.New(env("TVPN_PROXIES_DIR", filepath.Join(dataDir, "proxies")), filepath.Join(dataDir, "geo.json"))
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
 	go pl.Run(ctx)

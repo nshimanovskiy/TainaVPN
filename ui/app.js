@@ -142,30 +142,53 @@ async function fetchSubscription(url) {
   const data = await httpJSON('GET', url);
   const list = (data.proxies || []).filter((p) => !p.type || p.type === 'socks' || p.type === 'http');
   if (!list.length) throw new Error('В подписке нет прокси');
-  return list.map((p, i) => ({
-    name: p.name || data.name || 'Сервер',
-    type: p.type === 'http' ? 'http' : 'socks',
-    server: p.server,
-    port: +p.port,
-    username: p.username || '',
-    password: p.password || '',
-    sub: url,
-    subIndex: i,
-  }));
+  const seen = {};
+  return list.map((p, i) => {
+    const country = (p.country || '').toUpperCase();
+    // stable key inside the subscription: the country (or position if unknown)
+    let subKey = country || 'n' + i;
+    if (seen[subKey]) subKey += '-' + i;
+    seen[subKey] = true;
+    return {
+      name: p.country_name || '',
+      country,
+      type: p.type === 'http' ? 'http' : 'socks',
+      server: p.server,
+      port: +p.port,
+      username: p.username || '',
+      password: p.password || '',
+      sub: url,
+      subKey,
+    };
+  });
+}
+
+// syncSubscription replaces all profiles of a subscription with the fresh list,
+// keeping profile ids (and the selection) for countries that are still there.
+async function syncSubscription(url) {
+  const items = await fetchSubscription(url);
+  const old = store.profiles.filter((p) => p.sub === url);
+  const fresh = items.map((it) => {
+    const prev = old.find((p) => p.subKey === it.subKey);
+    return { ...(prev || {}), ...it, id: prev ? prev.id : uid() };
+  });
+  const firstIdx = store.profiles.findIndex((p) => p.sub === url);
+  const others = store.profiles.filter((p) => p.sub !== url);
+  if (firstIdx < 0) others.push(...fresh);
+  else others.splice(Math.min(firstIdx, others.length), 0, ...fresh);
+  store.profiles = others;
+  if (!store.profiles.find((p) => p.id === store.selected)) {
+    store.selected = (fresh[0] || store.profiles[0] || {}).id || null;
+  }
+  await save();
+  return fresh;
 }
 
 async function addSubscription(url) {
   url = url.trim();
   if (!/^https?:\/\//i.test(url)) throw new Error('Ссылка должна начинаться с https://');
-  const items = await fetchSubscription(url);
-  let firstId = null;
-  for (const it of items) {
-    const existing = store.profiles.find((p) => p.sub === url && p.subIndex === it.subIndex);
-    if (existing) Object.assign(existing, it);
-    else store.profiles.push({ id: uid(), ...it });
-    firstId = firstId || (existing ? existing.id : store.profiles[store.profiles.length - 1].id);
-  }
-  if (!store.selected || !store.profiles.find((p) => p.id === store.selected)) store.selected = firstId;
+  const fresh = await syncSubscription(url);
+  if (fresh[0] && !store.profiles.find((p) => p.id === store.selected && p.sub)) store.selected = fresh[0].id;
   await save();
   render();
 }
@@ -174,19 +197,54 @@ async function getFromServer() {
   const base = (store.serverUrl || DEFAULT_SERVER).replace(/\/+$/, '');
   const device = await Native.deviceName().catch(() => '');
   const data = await httpJSON('POST', base + '/api/v1/register', { device: device + ' (' + platform + ')' });
-  await addSubscription(data.subscription_url);
-  const added = store.profiles.find((p) => p.sub === data.subscription_url);
-  if (added) store.selected = added.id;
+  const fresh = await syncSubscription(data.subscription_url);
+  if (fresh[0]) store.selected = fresh[0].id;
   await save();
   render();
 }
 
+// refreshProfile updates the whole subscription the profile belongs to
+// and returns the (possibly new) profile for the same country.
 async function refreshProfile(p) {
-  if (!p.sub) return;
-  const items = await fetchSubscription(p.sub);
-  const it = items.find((x) => x.subIndex === p.subIndex) || items[0];
-  Object.assign(p, it);
-  await save();
+  if (!p.sub) return p;
+  const fresh = await syncSubscription(p.sub);
+  return fresh.find((x) => x.subKey === p.subKey) || fresh[0] || p;
+}
+
+// detectCountry asks our server which country a manually added proxy exits in.
+async function detectCountry(p) {
+  const base = (store.serverUrl || DEFAULT_SERVER).replace(/\/+$/, '');
+  try {
+    const r = await httpJSON('POST', base + '/api/v1/geo', { type: p.type, server: p.server, port: +p.port, username: p.username, password: p.password });
+    p.country = (r.country || '').toUpperCase();
+    p.countryName = r.country_name || '';
+  } catch (e) {
+    console.warn('country detection failed', e);
+  }
+}
+
+// ---------- flags & names ----------
+
+const regionNames = (() => { try { return new Intl.DisplayNames(['ru'], { type: 'region' }); } catch { return null; } })();
+
+function countryName(p) {
+  const cc = (p.country || '').toUpperCase();
+  if (p.sub && p.name) return p.name;
+  if (p.countryName) return p.countryName;
+  if (cc && regionNames) { try { return regionNames.of(cc); } catch {} }
+  return '';
+}
+
+function flagSrc(cc) {
+  cc = (cc || '').toLowerCase();
+  return /^[a-z]{2}$/.test(cc) ? `flags/${cc}.svg` : 'flags/xx.svg';
+}
+
+// profileTitle: what the user sees — the country, or a fallback name
+function profileTitle(p) {
+  const name = countryName(p);
+  if (p.sub) return name || 'Сервер';
+  return name || p.label || p.name || p.server;
 }
 
 // ---------- sing-box config ----------
@@ -252,10 +310,11 @@ async function connect() {
   status = { state: 'starting', error: '' };
   renderStatus();
   try {
+    let cur = p;
     if (p.sub) {
-      try { await refreshProfile(p); } catch (e) { console.warn('refresh failed', e); }
+      try { cur = await refreshProfile(p); store.selected = cur.id; await save(); render(); } catch (e) { console.warn('refresh failed', e); }
     }
-    await Native.start(buildConfig(p));
+    await Native.start(buildConfig(cur));
   } catch (e) {
     status = { state: 'stopped', error: String(e.message || e) };
   } finally {
@@ -288,7 +347,7 @@ function renderStatus() {
   pw.className = 'power';
   const p = store.profiles.find((x) => x.id === store.selected);
   let text = 'Отключено';
-  let sub = p ? (p.sub ? p.name : `${p.name} · ${p.server}:${p.port}`) : 'Добавьте прокси';
+  let sub = p ? profileTitle(p) : 'Добавьте прокси';
   switch (status.state) {
     case 'running': pw.classList.add('on'); text = 'Подключено'; break;
     case 'starting': pw.classList.add('busy'); text = 'Подключение…'; break;
@@ -297,6 +356,8 @@ function renderStatus() {
       if (status.error) { pw.classList.add('err'); text = 'Ошибка'; sub = status.error; }
   }
   $('statusText').textContent = text;
+  $('statusFlag').hidden = !p || (status.error && status.state === 'stopped');
+  if (p) $('statusFlag').src = flagSrc(p.country);
   $('statusSub').textContent = sub;
 }
 
@@ -305,12 +366,13 @@ function render() {
   ul.innerHTML = store.profiles.map((p) => `
     <li class="profile ${p.id === store.selected ? 'sel' : ''}" data-id="${p.id}">
       <span class="radio"></span>
+      <img class="flag" src="${flagSrc(p.country)}" alt="">
       <div class="p-main">
-        <div class="p-name">${esc(p.name || p.server)}${p.sub ? '<span class="tag">сервер</span>' : ''}</div>
-        <div class="p-sub">${p.sub ? 'с сервера' : (p.type === 'http' ? 'HTTP' : 'SOCKS5') + ' · ' + esc(p.server) + ':' + esc(p.port) + (p.username ? ' · ' + esc(p.username) : '')}</div>
+        <div class="p-name">${esc(profileTitle(p))}</div>
+        <div class="p-sub">${p.sub ? 'Tainavpn' : 'свой прокси' + (p.label && countryName(p) ? ' · ' + esc(p.label) : '') + ' · ' + esc(p.server) + ':' + esc(p.port)}</div>
       </div>
       <div class="p-act">
-        ${p.sub ? '<button data-act="refresh" title="Обновить">↻</button>' : ''}
+        ${p.sub ? '<button data-act="refresh" title="Обновить список с сервера">↻</button>' : ''}
         <button data-act="delete" title="Удалить">✕</button>
       </div>
     </li>`).join('');
@@ -400,7 +462,11 @@ function bind() {
       password: $('mPass').value,
     };
     if (!validProxy(p)) { $('addErr').textContent = 'Укажите корректные хост и порт'; return; }
-    if (!p.name) p.name = p.server;
+    p.label = p.name; // user's own title, if any
+    const btn = $('addManual'); btn.disabled = true; btn.textContent = 'Определяем страну…';
+    await detectCountry(p);
+    btn.disabled = false; btn.textContent = 'Сохранить';
+    if (!p.country && !p.label) p.label = p.server;
     store.profiles.push(p);
     if (!store.selected) store.selected = p.id;
     await save();
@@ -416,14 +482,19 @@ function bind() {
     const p = store.profiles.find((x) => x.id === li.dataset.id);
     const act = e.target.closest('button')?.dataset.act;
     if (act === 'delete') {
-      if (!confirm(`Удалить «${p.name}»?`)) return;
-      store.profiles = store.profiles.filter((x) => x !== p);
+      if (p.sub) {
+        if (!confirm('Удалить все прокси, полученные с сервера?')) return;
+        store.profiles = store.profiles.filter((x) => x.sub !== p.sub);
+      } else {
+        if (!confirm(`Удалить «${profileTitle(p)}»?`)) return;
+        store.profiles = store.profiles.filter((x) => x !== p);
+      }
       if (store.selected === p.id) store.selected = store.profiles[0]?.id || null;
       await save(); render();
       return;
     }
     if (act === 'refresh') {
-      try { await refreshProfile(p); render(); toast('Обновлено'); } catch (err) { toast(err.message); }
+      try { await syncSubscription(p.sub); render(); toast('Список обновлён'); } catch (err) { toast(err.message); }
       return;
     }
     if (store.selected === p.id) return;

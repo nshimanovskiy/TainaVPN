@@ -67,7 +67,7 @@
       </div>
       <p class="muted" id="dirHint" style="margin:0 0 8px"></p>
       <table>
-        <thead><tr><th>Прокси</th><th>Тип</th><th>Состояние</th><th>Пользователей</th><th>Файл</th></tr></thead>
+        <thead><tr><th>Страна</th><th>Прокси</th><th>Тип</th><th>Состояние</th><th>Пользователей</th><th>Файл</th></tr></thead>
         <tbody id="proxies"></tbody>
       </table>
       <pre id="perr" hidden></pre>
@@ -99,28 +99,29 @@ async function load() {
   $('status').innerHTML = `Прокси в пуле: <b>${st.proxies_alive}</b> рабочих из <b>${st.proxies_total}</b>` +
     (st.proxies_total === 0 ? ' <span style="color:var(--bad)">— добавьте прокси в папку на сервере</span>' : '') +
     ` · саморегистрация из приложения: ${st.open_registration ? 'включена' : 'выключена'}`;
-  $('dirHint').innerHTML = `Файлы <code>*.txt</code> в папке <code>proxies</code> рядом с docker-compose.yml, по одному прокси в строке: <code>user:pass@host:port</code>. Изменения подхватываются за 10 секунд.`;
+  $('dirHint').innerHTML = `Файлы <code>*.txt</code> в папке <code>proxies</code> рядом с docker-compose.yml, по одному прокси в строке: <code>user:pass@host:port</code>. Страна определяется автоматически по выходному IP; задать вручную — через пробел: <code>user:pass@host:port DE</code>. Каждый пользователь получает по одному прокси каждой страны. Изменения подхватываются за 10 секунд.`;
   px.proxies = px.proxies || []; px.errors = px.errors || [];
   $('proxies').innerHTML = px.proxies.map(p => `
     <tr>
+      <td>${esc(p.label)}${p.country_manual ? ' <span class="muted" style="font-size:12px">(задана)</span>' : ''}</td>
       <td>${esc(p.host)}:${p.port}<div class="muted" style="font-size:12px">${esc(p.username || 'без логина')}</div></td>
       <td>${p.type === 'http' ? 'HTTP' : 'SOCKS5'}</td>
       <td>${!p.checked_at || p.checked_at.startsWith('0001') ? '<span class="pill">проверяется</span>' : p.alive ? '<span class="pill on">работает</span>' : `<span class="pill off">не работает</span><div class="muted" style="font-size:12px">${esc(p.error)}</div>`}</td>
       <td>${p.users}</td>
       <td class="muted">${esc(p.file)}:${p.line}</td>
-    </tr>`).join('') || '<tr><td colspan="5" class="muted">Папка пуста</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="6" class="muted">Папка пуста</td></tr>';
   $('perr').hidden = !px.errors.length;
   $('perr').textContent = px.errors.length ? 'Строки с ошибками:\n' + px.errors.join('\n') : '';
   $('users').innerHTML = (users || []).map(u => `
     <tr>
       <td>${esc(u.name)}<div class="muted" style="font-size:12px">${esc(u.username)} · ${u.source === 'app' ? 'из приложения' : 'вручную'}</div></td>
       <td>${u.disabled ? '<span class="pill off">выключен</span>' : '<span class="pill on">активен</span>'}</td>
-      <td>${u.proxy ? esc(u.proxy) + (u.proxy_alive ? '' : ' <span class="pill off">не работает</span>') : '<span class="muted">выдаётся при подключении</span>'}</td>
+      <td>${(u.assigned || []).length ? u.assigned.map(a => `<div>${esc(a.label)} <span class="muted" style="font-size:12px">${esc(a.addr)}</span>${a.alive ? '' : ' <span class="pill off">не работает</span>'}</div>`).join('') : '<span class="muted">выдаются при подключении</span>'}</td>
       <td>${fmt(u.last_seen)}<div class="muted" style="font-size:12px">${esc(u.last_ip || '')}</div></td>
       <td><div class="row"><button class="ghost" data-copy="${esc(u.subscription_url)}" title="Для приложений Windows / Android / Ubuntu">Ссылка</button><button class="ghost" data-copy="${esc(u.ios_url)}" title="Страница для iPhone: открыть в Safari">iPhone</button></div></td>
       <td><div class="row">
         <button class="ghost" data-act="${u.disabled ? 'enable' : 'disable'}" data-id="${u.id}">${u.disabled ? 'Включить' : 'Выключить'}</button>
-        <button class="ghost" data-act="reassign" data-id="${u.id}" title="Выдать другой прокси из папки (применится при следующем подключении)">Другой прокси</button>
+        <button class="ghost" data-act="reassign" data-id="${u.id}" title="Выдать другие прокси из папки (применится при следующем подключении)">Другие прокси</button>
         <button class="danger" data-act="delete" data-id="${u.id}">Удалить</button>
       </div></td>
     </tr>`).join('') || '<tr><td colspan="6" class="muted">Пока нет пользователей</td></tr>';

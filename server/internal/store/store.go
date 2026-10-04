@@ -15,15 +15,15 @@ import (
 )
 
 type User struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Key       string    `json:"key"`
-	ProxyID   string    `json:"proxy_id,omitempty"` // proxy from the pool assigned to this user
-	Disabled  bool      `json:"disabled"`
-	CreatedAt time.Time `json:"created_at"`
-	LastSeen  time.Time `json:"last_seen,omitempty"`
-	LastIP    string    `json:"last_ip,omitempty"`
-	Source    string    `json:"source,omitempty"` // "admin" or "app"
+	ID        string            `json:"id"`
+	Name      string            `json:"name"`
+	Key       string            `json:"key"`
+	Proxies   map[string]string `json:"proxies,omitempty"` // country -> proxy ID from the pool
+	Disabled  bool              `json:"disabled"`
+	CreatedAt time.Time         `json:"created_at"`
+	LastSeen  time.Time         `json:"last_seen,omitempty"`
+	LastIP    string            `json:"last_ip,omitempty"`
+	Source    string            `json:"source,omitempty"` // "admin" or "app"
 }
 
 var ErrNotFound = errors.New("user not found")
@@ -133,15 +133,15 @@ func (s *Store) SetDisabled(id string, disabled bool) error {
 	return err
 }
 
-// SetProxy assigns a pool proxy to the user ("" clears the assignment).
-func (s *Store) SetProxy(id, proxyID string) error {
+// SetProxies stores the user's assigned proxies (country -> proxy ID).
+func (s *Store) SetProxies(id string, proxies map[string]string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	u := s.users[id]
 	if u == nil {
 		return ErrNotFound
 	}
-	u.ProxyID = proxyID
+	u.Proxies = proxies
 	return s.saveLocked()
 }
 

@@ -89,6 +89,15 @@ jobs:
             # every user must get the working proxy from the folder, never the dead one
             echo "$CFG" | python3 -c 'import json,sys;p=json.load(sys.stdin)["proxies"][0];assert (p["server"],p["port"],p["username"])==("127.0.0.1",21080,"up"),p'
           done
+          # country of the upstream proxy is detected through the proxy itself (runner is in the US)
+          for i in $(seq 1 20); do
+            C=$(curl -fsS -H "Authorization: Bearer 0123456789abcdef0123" http://127.0.0.1:18090/api/admin/proxies | python3 -c 'import json,sys;print(" ".join(p.get("country","") for p in json.load(sys.stdin)["proxies"] if p["username"]=="up"))')
+            [ -n "$C" ] && break; sleep 2
+          done
+          echo "detected country: $C"
+          [ -n "$C" ] || { echo "::error::country was not detected"; cat /tmp/server.log; exit 1; }
+          CFG=$(curl -fsS "$SUB")
+          echo "$CFG" | python3 -c 'import json,sys;p=json.load(sys.stdin)["proxies"];print(p);assert len(p)==1 and p[0]["country"] and p[0]["name"].split()[1]'
           echo "$CFG" > /tmp/sub.json
           KEY=${SUB##*/sub/}
           echo "$KEY" > /tmp/key

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/nshimanovskiy/tainavpn/server/internal/pool"
 	"github.com/nshimanovskiy/tainavpn/server/internal/store"
@@ -26,23 +27,23 @@ var icon180 []byte
 //go:embed icon-512.png
 var icon512 []byte
 
-// resolve finds the user for a subscription key and returns their proxy.
-func (a *API) resolve(w http.ResponseWriter, r *http.Request) (store.User, pool.Proxy, bool) {
+// resolve finds the user for a subscription key and returns their proxies.
+func (a *API) resolve(w http.ResponseWriter, r *http.Request) (store.User, []pool.Proxy, bool) {
 	u, ok := a.store.ByKey(r.PathValue("key"), clientIP(r))
 	if !ok {
 		errJSON(w, 404, "unknown key")
-		return u, pool.Proxy{}, false
+		return u, nil, false
 	}
 	if u.Disabled {
 		errJSON(w, 403, "key is disabled")
-		return u, pool.Proxy{}, false
+		return u, nil, false
 	}
-	px, err := a.assign(u, false)
+	list, err := a.assign(u, false)
 	if err != nil {
 		errJSON(w, 503, err.Error())
-		return u, pool.Proxy{}, false
+		return u, nil, false
 	}
-	return u, px, true
+	return u, list, true
 }
 
 func (a *API) subHeaders(w http.ResponseWriter) {
@@ -66,18 +67,22 @@ func shareLink(px pool.Proxy, name string) string {
 
 // subLinks: GET /sub/{key}/links — base64 list of share links (universal subscription format).
 func (a *API) subLinks(w http.ResponseWriter, r *http.Request) {
-	_, px, ok := a.resolve(w, r)
+	_, list, ok := a.resolve(w, r)
 	if !ok {
 		return
 	}
 	a.subHeaders(w)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = w.Write([]byte(base64.StdEncoding.EncodeToString([]byte(shareLink(px, a.cfg.Name) + "\n"))))
+	var b strings.Builder
+	for _, px := range list {
+		b.WriteString(shareLink(px, pool.Label(px.Country, a.cfg.Name)) + "\n")
+	}
+	_, _ = w.Write([]byte(base64.StdEncoding.EncodeToString([]byte(b.String()))))
 }
 
 // subSingBox: GET /sub/{key}/singbox — complete sing-box client config (remote profile).
 func (a *API) subSingBox(w http.ResponseWriter, r *http.Request) {
-	_, px, ok := a.resolve(w, r)
+	_, list, ok := a.resolve(w, r)
 	if !ok {
 		return
 	}
@@ -85,22 +90,39 @@ func (a *API) subSingBox(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	_ = enc.Encode(SingBoxConfig(px))
+	_ = enc.Encode(SingBoxConfig(list, a.cfg.Name))
 }
 
 // SingBoxConfig mirrors buildConfig() in ui/app.js (TUN mode, DNS through the proxy).
-func SingBoxConfig(px pool.Proxy) map[string]any {
-	out := map[string]any{"tag": "proxy", "server": px.Host, "server_port": px.Port}
-	if px.Type == "http" {
-		out["type"] = "http"
-	} else {
-		out["type"] = "socks"
-		out["version"] = "5"
+// With several countries the "proxy" outbound is a selector, the first country is default.
+func SingBoxConfig(list []pool.Proxy, name string) map[string]any {
+	var outbounds []any
+	var tags []string
+	for i, px := range list {
+		tag := pool.Label(px.Country, name)
+		if len(list) == 1 {
+			tag = "proxy"
+		} else if contains(tags, tag) {
+			tag += " " + strconv.Itoa(i+1)
+		}
+		tags = append(tags, tag)
+		out := map[string]any{"tag": tag, "server": px.Host, "server_port": px.Port}
+		if px.Type == "http" {
+			out["type"] = "http"
+		} else {
+			out["type"] = "socks"
+			out["version"] = "5"
+		}
+		if px.Username != "" {
+			out["username"] = px.Username
+			out["password"] = px.Password
+		}
+		outbounds = append(outbounds, out)
 	}
-	if px.Username != "" {
-		out["username"] = px.Username
-		out["password"] = px.Password
+	if len(list) > 1 {
+		outbounds = append([]any{map[string]any{"type": "selector", "tag": "proxy", "outbounds": tags, "default": tags[0]}}, outbounds...)
 	}
+	outbounds = append(outbounds, map[string]any{"type": "direct", "tag": "direct"})
 	return map[string]any{
 		"log": map[string]any{"level": "warn"},
 		"dns": map[string]any{
@@ -118,7 +140,7 @@ func SingBoxConfig(px pool.Proxy) map[string]any {
 			"mtu":        9000,
 			"auto_route": true,
 		}},
-		"outbounds": []any{out, map[string]any{"type": "direct", "tag": "direct"}},
+		"outbounds": outbounds,
 		"route": map[string]any{
 			"rules": []any{
 				map[string]any{"action": "sniff"},
@@ -161,4 +183,13 @@ func pngHandler(data []byte) http.HandlerFunc {
 		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 		_, _ = w.Write(data)
 	}
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }

@@ -1,0 +1,2 @@
+Flag images: Twemoji (https://github.com/jdecked/twemoji), Copyright Twitter, Inc. and other contributors,
+licensed under CC-BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Files renamed to ISO 3166-1 codes.

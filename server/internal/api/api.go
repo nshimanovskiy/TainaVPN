@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -35,8 +36,9 @@ type API struct {
 
 	assignMu sync.Mutex
 
-	rlMu sync.Mutex
-	rl   map[string][]time.Time
+	rlMu  sync.Mutex
+	rl    map[string][]time.Time
+	geoRL map[string][]time.Time
 }
 
 func New(cfg Config, st *store.Store, pl *pool.Pool) *API {
@@ -50,6 +52,7 @@ func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/info", a.info)
 	mux.HandleFunc("POST /api/v1/register", a.register)
+	mux.HandleFunc("POST /api/v1/geo", a.geo)
 	mux.HandleFunc("GET /sub/{key}", a.subscription)
 	mux.HandleFunc("GET /sub/{key}/links", a.subLinks)
 	mux.HandleFunc("GET /sub/{key}/singbox", a.subSingBox)
@@ -134,20 +137,28 @@ func (a *API) info(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) allowRegister(ip string) bool {
+	return a.allow(&a.rl, ip, a.cfg.RegisterPerDay, 24*time.Hour)
+}
+
+// allow is a simple sliding-window rate limiter keyed by string.
+func (a *API) allow(m *map[string][]time.Time, key string, limit int, window time.Duration) bool {
 	a.rlMu.Lock()
 	defer a.rlMu.Unlock()
+	if *m == nil {
+		*m = map[string][]time.Time{}
+	}
 	now := time.Now()
-	recent := a.rl[ip][:0]
-	for _, t := range a.rl[ip] {
-		if now.Sub(t) < 24*time.Hour {
+	recent := (*m)[key][:0]
+	for _, t := range (*m)[key] {
+		if now.Sub(t) < window {
 			recent = append(recent, t)
 		}
 	}
-	if len(recent) >= a.cfg.RegisterPerDay {
-		a.rl[ip] = recent
+	if len(recent) >= limit {
+		(*m)[key] = recent
 		return false
 	}
-	a.rl[ip] = append(recent, now)
+	(*m)[key] = append(recent, now)
 	return true
 }
 
@@ -187,57 +198,98 @@ func (a *API) register(w http.ResponseWriter, r *http.Request) {
 func (a *API) load() map[string]int {
 	load := map[string]int{}
 	for _, u := range a.store.List() {
-		if !u.Disabled && u.ProxyID != "" {
-			load[u.ProxyID]++
+		if u.Disabled {
+			continue
+		}
+		for _, id := range u.Proxies {
+			load[id]++
 		}
 	}
 	return load
 }
 
-// assign returns the user's proxy, (re)assigning one from the pool when the
-// current one is missing from the folder or dead (or when force is set).
-func (a *API) assign(u store.User, force bool) (pool.Proxy, error) {
+// assign returns the user's proxies, one per country available in the pool.
+// A country's proxy is (re)assigned when missing, dead, moved to another
+// country in the file, or when force is set.
+func (a *API) assign(u store.User, force bool) ([]pool.Proxy, error) {
 	a.assignMu.Lock()
 	defer a.assignMu.Unlock()
-	if !force && u.ProxyID != "" {
-		if px, ok := a.pool.Get(u.ProxyID); ok && px.Usable() {
-			return px, nil
+	load := a.load()
+	for _, id := range u.Proxies {
+		load[id]--
+	}
+	next := map[string]string{}
+	var out []pool.Proxy
+	for _, country := range a.pool.Countries() {
+		cur := u.Proxies[country]
+		if !force && cur != "" {
+			if px, ok := a.pool.Get(cur); ok && px.Usable() && px.Country == country {
+				next[country] = px.ID
+				load[px.ID]++
+				out = append(out, px)
+				continue
+			}
+		}
+		exclude := ""
+		if force {
+			exclude = cur
+		}
+		px, ok := a.pool.Pick(country, load, exclude)
+		if !ok {
+			continue
+		}
+		next[country] = px.ID
+		load[px.ID]++
+		out = append(out, px)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("на сервере сейчас нет свободных прокси, попробуйте позже")
+	}
+	if !sameMap(next, u.Proxies) {
+		_ = a.store.SetProxies(u.ID, next)
+	}
+	return out, nil
+}
+
+func sameMap(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
 		}
 	}
-	load := a.load()
-	if u.ProxyID != "" {
-		load[u.ProxyID]--
+	return true
+}
+
+// proxyJSON describes one proxy for the apps.
+func proxyJSON(px pool.Proxy, fallbackName string) map[string]any {
+	return map[string]any{
+		"name":         pool.Label(px.Country, fallbackName),
+		"country":      px.Country,
+		"country_name": pool.CountryName(px.Country),
+		"type":         px.Type,
+		"server":       px.Host,
+		"port":         px.Port,
+		"username":     px.Username,
+		"password":     px.Password,
 	}
-	exclude := ""
-	if force {
-		exclude = u.ProxyID
-	}
-	px, ok := a.pool.Pick(load, exclude)
-	if !ok {
-		return pool.Proxy{}, errors.New("на сервере сейчас нет свободных прокси, попробуйте позже")
-	}
-	if px.ID != u.ProxyID {
-		_ = a.store.SetProxy(u.ID, px.ID)
-	}
-	return px, nil
 }
 
 func (a *API) subscription(w http.ResponseWriter, r *http.Request) {
-	_, px, ok := a.resolve(w, r)
+	_, list, ok := a.resolve(w, r)
 	if !ok {
 		return
 	}
+	proxies := []any{}
+	for _, px := range list {
+		proxies = append(proxies, proxyJSON(px, a.cfg.Name))
+	}
 	writeJSON(w, 200, map[string]any{
-		"version": 1,
+		"version": 2,
 		"name":    a.cfg.Name,
-		"proxies": []any{map[string]any{
-			"name":     a.cfg.Name,
-			"type":     px.Type,
-			"server":   px.Host,
-			"port":     px.Port,
-			"username": px.Username,
-			"password": px.Password,
-		}},
+		"proxies": proxies,
 	})
 }
 
@@ -255,18 +307,26 @@ func (a *API) admin(next http.HandlerFunc) http.HandlerFunc {
 
 type userView struct {
 	store.User
-	SubscriptionURL string `json:"subscription_url"`
-	IOSURL          string `json:"ios_url"`
-	Proxy           string `json:"proxy,omitempty"`
-	ProxyAlive      bool   `json:"proxy_alive"`
+	SubscriptionURL string         `json:"subscription_url"`
+	IOSURL          string         `json:"ios_url"`
+	Assigned        []assignedView `json:"assigned"`
+}
+
+type assignedView struct {
+	Label string `json:"label"`
+	Addr  string `json:"addr"`
+	Alive bool   `json:"alive"`
 }
 
 func (a *API) view(r *http.Request, u store.User) userView {
 	v := userView{User: u, SubscriptionURL: a.baseURL(r) + "/sub/" + u.Key, IOSURL: a.baseURL(r) + "/ios#" + u.Key}
-	if px, ok := a.pool.Get(u.ProxyID); ok {
-		v.Proxy = px.Addr()
-		v.ProxyAlive = px.Usable()
+	v.Assigned = []assignedView{}
+	for _, id := range u.Proxies {
+		if px, ok := a.pool.Get(id); ok {
+			v.Assigned = append(v.Assigned, assignedView{pool.Label(px.Country, "без страны"), px.Addr(), px.Usable()})
+		}
 	}
+	sort.Slice(v.Assigned, func(i, j int) bool { return v.Assigned[i].Label < v.Assigned[j].Label })
 	return v
 }
 
@@ -334,7 +394,8 @@ func (a *API) reassign(w http.ResponseWriter, r *http.Request) {
 
 type proxyView struct {
 	pool.Proxy
-	Users int `json:"users"`
+	Users int    `json:"users"`
+	Label string `json:"label"`
 }
 
 func (a *API) listProxies(w http.ResponseWriter, r *http.Request) {
@@ -342,7 +403,7 @@ func (a *API) listProxies(w http.ResponseWriter, r *http.Request) {
 	list := []proxyView{}
 	for _, px := range a.pool.List() {
 		px.Password = "" // never send passwords to the browser
-		list = append(list, proxyView{px, load[px.ID]})
+		list = append(list, proxyView{px, load[px.ID], pool.Label(px.Country, "страна не определена")})
 	}
 	writeJSON(w, 200, map[string]any{"proxies": list, "errors": a.pool.Errors(), "dir": a.pool.Dir()})
 }
