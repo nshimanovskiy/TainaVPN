@@ -42,6 +42,7 @@ jobs:
         run: |
           go mod tidy
           go build -trimpath -ldflags "-s -w" -o deploy/tainavpn-server ./server/cmd/tainavpn-server
+          go build -trimpath -ldflags "-s -w" -o deploy/tainavpn-bot ./bot
       - name: Prepare SSH
         env:
           SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
@@ -60,9 +61,9 @@ jobs:
         run: |
           SSH="ssh -i ~/.ssh/id_deploy -p ${PORT:-22}"
           # resolve ~ on the server side
-          DIR=$($SSH "$USER@$HOST" "mkdir -p $REMOTE_DIR/data $REMOTE_DIR/proxies && cd $REMOTE_DIR && pwd")
+          DIR=$($SSH "$USER@$HOST" "mkdir -p $REMOTE_DIR/data $REMOTE_DIR/proxies $REMOTE_DIR/downloads && cd $REMOTE_DIR && pwd")
           echo "REMOTE_ABS=$DIR" >> $GITHUB_ENV
-          scp -i ~/.ssh/id_deploy -P "${PORT:-22}" deploy/tainavpn-server deploy/Dockerfile deploy/docker-compose.yml deploy/.env.example deploy/proxies.example.txt "$USER@$HOST:$DIR/"
+          scp -i ~/.ssh/id_deploy -P "${PORT:-22}" deploy/tainavpn-server deploy/tainavpn-bot deploy/Dockerfile deploy/docker-compose.yml deploy/.env.example deploy/proxies.example.txt "$USER@$HOST:$DIR/"
       - name: Restart
         env:
           HOST: ${{ secrets.VPS_HOST }}
@@ -89,10 +90,25 @@ jobs:
             chmod 600 .env
             echo "::notice::Создан $REMOTE_DIR/.env. Токен админки: grep ADMIN_TOKEN $REMOTE_DIR/.env"
           fi
+          # --- migrate older .env files ---
+          # admin panel moved to /adminadminadmin
+          sed -i 's|^TVPN_ADMIN_PATH=/panel$|TVPN_ADMIN_PATH=/adminadminadmin|' .env
+          # app self-registration was replaced by the Telegram bot
+          sed -i '/^TVPN_OPEN_REGISTRATION=/d; /^TVPN_REGISTER_PER_DAY=/d; /^# true — приложение может само/d; /^# Сколько ключей в сутки/d' .env
+          if ! grep -q '^TVPN_BOT_SECRET=' .env || grep -q '^TVPN_BOT_SECRET=CHANGE_ME' .env; then
+            sed -i '/^TVPN_BOT_SECRET=/d' .env
+            printf '\n# --- Telegram-бот ---\n# Общий секрет бота и сервера (создан автоматически)\nTVPN_BOT_SECRET=%s\n' "$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')" >> .env
+          fi
+          grep -q '^TVPN_BOT_TOKEN=' .env || printf '# Токен бота от @BotFather (пусто — бот не запускается)\nTVPN_BOT_TOKEN=\n' >> .env
+          grep -q '^TVPN_BOT_ALLOWED=' .env || printf '# Кому бот выдаёт ссылки: Telegram ID или @username через запятую. Пусто — всем.\nTVPN_BOT_ALLOWED=\n' >> .env
+          grep -q '^TVPN_BOT_TOKEN=.\+' .env || echo "::warning::Telegram-бот не настроен: впишите токен от @BotFather в $REMOTE_DIR/.env (TVPN_BOT_TOKEN=...) и выполните: cd $REMOTE_DIR && docker compose up -d"
           [ -e proxies/README.txt ] || cp proxies.example.txt proxies/README.txt
-          $DOCKER compose up -d --build --force-recreate
+          $DOCKER compose up -d --build --force-recreate --remove-orphans
           sleep 3
           $DOCKER compose ps
           $DOCKER compose logs --tail 20
-          curl -fsS http://127.0.0.1:$(grep -oP '^TVPN_API_LISTEN=.*:\K\d+' .env || echo 8090)/api/v1/info
+          P=$(grep -oP '^TVPN_API_LISTEN=.*:\K\d+' .env || echo 8090)
+          curl -fsS http://127.0.0.1:$P/api/v1/info
+          ADMIN=$(grep -oP '^TVPN_ADMIN_PATH=\K.*' .env || echo /adminadminadmin)
+          curl -fsS -o /dev/null -w "admin panel $ADMIN: %{http_code}\n" http://127.0.0.1:$P$ADMIN
           EOS

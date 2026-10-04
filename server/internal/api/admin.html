@@ -52,7 +52,7 @@
         <input id="newName" placeholder="Имя (например, Телефон Маши)" style="flex:1">
         <button id="create">Создать ключ</button>
       </div>
-      <p class="muted" style="margin:10px 0 0">«Ссылка» — вставить в приложении Tainavpn (Windows, Android, Ubuntu): «Добавить → С сервера». «iPhone» — открыть на айфоне в Safari.</p>
+      <p class="muted" style="margin:10px 0 0">Ссылку-подписку пользователь вставляет в приложении: «+ Добавить → По ссылке». Обычно пользователи получают её сами в Telegram-боте.</p>
     </div>
     <div class="card scroll">
       <table>
@@ -98,7 +98,7 @@ async function load() {
   $('login').hidden = true; $('app').hidden = false;
   $('status').innerHTML = `Прокси в пуле: <b>${st.proxies_alive}</b> рабочих из <b>${st.proxies_total}</b>` +
     (st.proxies_total === 0 ? ' <span style="color:var(--bad)">— добавьте прокси в папку на сервере</span>' : '') +
-    ` · саморегистрация из приложения: ${st.open_registration ? 'включена' : 'выключена'}`;
+    ` · Telegram-бот: ${st.bot_url ? `<a href="${esc(st.bot_url)}" target="_blank" style="color:var(--accent)">${esc(st.bot_url.replace('https://t.me/', '@'))}</a>` : '<span style="color:var(--bad)">не настроен (TVPN_BOT_TOKEN в .env)</span>'}`;
   $('dirHint').innerHTML = `Файлы <code>*.txt</code> в папке <code>proxies</code> рядом с docker-compose.yml, по одному прокси в строке: <code>user:pass@host:port</code>. Страна определяется автоматически по выходному IP; задать вручную — через пробел: <code>user:pass@host:port DE</code>. Каждый пользователь получает по одному прокси каждой страны. Изменения подхватываются за 10 секунд.`;
   px.proxies = px.proxies || []; px.errors = px.errors || [];
   $('proxies').innerHTML = px.proxies.map(p => `
@@ -114,11 +114,11 @@ async function load() {
   $('perr').textContent = px.errors.length ? 'Строки с ошибками:\n' + px.errors.join('\n') : '';
   $('users').innerHTML = (users || []).map(u => `
     <tr>
-      <td>${esc(u.name)}<div class="muted" style="font-size:12px">${esc(u.username)} · ${u.source === 'app' ? 'из приложения' : 'вручную'}</div></td>
+      <td>${esc(u.name)}<div class="muted" style="font-size:12px">${u.telegram_id ? 'Telegram ' + u.telegram_id : (u.source === 'app' ? 'из приложения' : 'вручную')}</div></td>
       <td>${u.disabled ? '<span class="pill off">выключен</span>' : '<span class="pill on">активен</span>'}</td>
       <td>${(u.assigned || []).length ? u.assigned.map(a => `<div>${esc(a.label)} <span class="muted" style="font-size:12px">${esc(a.addr)}</span>${a.alive ? '' : ' <span class="pill off">не работает</span>'}</div>`).join('') : '<span class="muted">выдаются при подключении</span>'}</td>
       <td>${fmt(u.last_seen)}<div class="muted" style="font-size:12px">${esc(u.last_ip || '')}</div></td>
-      <td><div class="row"><button class="ghost" data-copy="${esc(u.subscription_url)}" title="Для приложений Windows / Android / Ubuntu">Ссылка</button><button class="ghost" data-copy="${esc(u.ios_url)}" title="Страница для iPhone: открыть в Safari">iPhone</button></div></td>
+      <td><button class="ghost" data-copy="${esc(u.subscription_url)}" title="Ссылка-подписка для приложения">Копировать</button></td>
       <td><div class="row">
         <button class="ghost" data-act="${u.disabled ? 'enable' : 'disable'}" data-id="${u.id}">${u.disabled ? 'Включить' : 'Выключить'}</button>
         <button class="ghost" data-act="reassign" data-id="${u.id}" title="Выдать другие прокси из папки (применится при следующем подключении)">Другие прокси</button>

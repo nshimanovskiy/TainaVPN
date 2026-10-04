@@ -6,13 +6,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -28,32 +29,15 @@ func env(key, def string) string {
 	return def
 }
 
-func envInt(key string, def int) int {
-	if v, err := strconv.Atoi(env(key, "")); err == nil {
-		return v
-	}
-	return def
-}
-
-func envBool(key string, def bool) bool {
-	switch strings.ToLower(env(key, "")) {
-	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off":
-		return false
-	}
-	return def
-}
-
 func main() {
 	log.SetFlags(log.LstdFlags)
 	cfg := api.Config{
-		Name:             env("TVPN_NAME", "Tainavpn"),
-		PublicURL:        env("TVPN_PUBLIC_URL", ""),
-		AdminToken:       env("TVPN_ADMIN_TOKEN", ""),
-		AdminPath:        env("TVPN_ADMIN_PATH", "/panel"),
-		OpenRegistration: envBool("TVPN_OPEN_REGISTRATION", false),
-		RegisterPerDay:   envInt("TVPN_REGISTER_PER_DAY", 3),
+		Name:       env("TVPN_NAME", "Tainavpn"),
+		PublicURL:  env("TVPN_PUBLIC_URL", ""),
+		AdminToken: env("TVPN_ADMIN_TOKEN", ""),
+		AdminPath:  env("TVPN_ADMIN_PATH", "/adminadminadmin"),
+		BotSecret:  env("TVPN_BOT_SECRET", ""),
+		BotURL:     botURL(env("TVPN_BOT_TOKEN", "")),
 	}
 	if len(cfg.AdminToken) < 16 {
 		log.Fatal("TVPN_ADMIN_TOKEN must be at least 16 characters")
@@ -88,4 +72,41 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
+}
+
+// botURL learns the bot's username from Telegram (getMe) in the background,
+// so the apps can show an "Open Telegram bot" button.
+func botURL(token string) func() string {
+	var mu sync.Mutex
+	url := ""
+	if token != "" {
+		go func() {
+			client := &http.Client{Timeout: 20 * time.Second}
+			for {
+				if resp, err := client.Get("https://api.telegram.org/bot" + token + "/getMe"); err == nil {
+					var r struct {
+						OK     bool `json:"ok"`
+						Result struct {
+							Username string `json:"username"`
+						} `json:"result"`
+					}
+					_ = json.NewDecoder(resp.Body).Decode(&r)
+					resp.Body.Close()
+					if r.OK && r.Result.Username != "" {
+						mu.Lock()
+						url = "https://t.me/" + r.Result.Username
+						mu.Unlock()
+						log.Printf("telegram bot: %s", url)
+						return
+					}
+				}
+				time.Sleep(time.Minute)
+			}
+		}()
+	}
+	return func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return url
+	}
 }

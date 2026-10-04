@@ -173,6 +173,15 @@ var errText = map[string]map[string]string{
 	},
 }
 
+// OpenURL opens an https link (the Telegram bot) in the default browser.
+func (a *App) OpenURL(url string) error {
+	if !strings.HasPrefix(url, "https://") {
+		return &uiError{"bad url"}
+	}
+	wruntime.BrowserOpenURL(a.ctx, url)
+	return nil
+}
+
 // SetLang is called by the UI when the language changes ("ru" or "en").
 func (a *App) SetLang(lang string) {
 	a.mu.Lock()

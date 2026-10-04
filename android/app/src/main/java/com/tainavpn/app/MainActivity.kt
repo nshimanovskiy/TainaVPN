@@ -97,6 +97,18 @@ class MainActivity : Activity() {
         }
 
         @JavascriptInterface
+        fun openUrl(url: String) {
+            if (!url.startsWith("https://")) return
+            runOnUiThread {
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+                } catch (e: Exception) {
+                    android.widget.Toast.makeText(this@MainActivity, url, android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+
+        @JavascriptInterface
         fun setLang(lang: String) {
             Lang.set(this@MainActivity, lang)
         }

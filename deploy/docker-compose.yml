@@ -14,3 +14,20 @@ services:
       - ./data:/data
       # put proxy lists here: *.txt files, one user:pass@host:port per line
       - ./proxies:/proxies:ro
+
+  # Telegram bot: gives users their subscription link and the app files.
+  # Needs TVPN_BOT_TOKEN (from @BotFather) in .env
+  bot:
+    image: tainavpn-server:latest
+    container_name: tainavpn-bot
+    restart: unless-stopped
+    depends_on: [tainavpn]
+    # talks to the API on 127.0.0.1
+    network_mode: host
+    env_file: .env
+    entrypoint: ["/usr/local/bin/tainavpn-bot"]
+    environment:
+      TVPN_DOWNLOADS_DIR: /downloads
+    volumes:
+      # app files (exe/apk/deb), uploaded here by the release workflow
+      - ./downloads:/downloads:ro

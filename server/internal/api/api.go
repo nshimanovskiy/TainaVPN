@@ -21,12 +21,12 @@ import (
 var adminHTML []byte
 
 type Config struct {
-	Name             string // shown in the app, e.g. "Tainavpn"
-	PublicURL        string // https://vpn.example.com (used to build subscription links)
-	AdminToken       string
-	AdminPath        string // e.g. /panel
-	OpenRegistration bool   // allow the app to obtain a key by itself
-	RegisterPerDay   int    // per-IP limit for self-registration
+	Name       string // shown in the app, e.g. "Tainavpn"
+	PublicURL  string // https://vpn.example.com (used to build subscription links)
+	AdminToken string
+	AdminPath  string // e.g. /adminadminadmin
+	BotSecret  string // shared secret of the Telegram bot container
+	BotURL     func() string
 }
 
 type API struct {
@@ -42,24 +42,15 @@ type API struct {
 }
 
 func New(cfg Config, st *store.Store, pl *pool.Pool) *API {
-	if cfg.RegisterPerDay <= 0 {
-		cfg.RegisterPerDay = 3
-	}
 	return &API{cfg: cfg, store: st, pool: pl, rl: map[string][]time.Time{}}
 }
 
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/info", a.info)
-	mux.HandleFunc("POST /api/v1/register", a.register)
 	mux.HandleFunc("POST /api/v1/geo", a.geo)
 	mux.HandleFunc("GET /sub/{key}", a.subscription)
-	mux.HandleFunc("GET /sub/{key}/links", a.subLinks)
-	mux.HandleFunc("GET /sub/{key}/singbox", a.subSingBox)
-	mux.HandleFunc("GET /ios", a.iosPage)
-	mux.HandleFunc("GET /ios/manifest.json", a.iosManifest)
-	mux.HandleFunc("GET /ios/icon-180.png", pngHandler(icon180))
-	mux.HandleFunc("GET /ios/icon-512.png", pngHandler(icon512))
+	mux.HandleFunc("POST /api/bot/subscription", a.bot(a.botSubscription))
 	mux.HandleFunc("GET /api/admin/users", a.admin(a.listUsers))
 	mux.HandleFunc("POST /api/admin/users", a.admin(a.createUser))
 	mux.HandleFunc("DELETE /api/admin/users/{id}", a.admin(a.deleteUser))
@@ -129,15 +120,18 @@ func (a *API) baseURL(r *http.Request) string {
 	return scheme + "://" + r.Host
 }
 
-func (a *API) info(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{
-		"name":              a.cfg.Name,
-		"open_registration": a.cfg.OpenRegistration,
-	})
+func (a *API) botURL() string {
+	if a.cfg.BotURL != nil {
+		return a.cfg.BotURL()
+	}
+	return ""
 }
 
-func (a *API) allowRegister(ip string) bool {
-	return a.allow(&a.rl, ip, a.cfg.RegisterPerDay, 24*time.Hour)
+func (a *API) info(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, map[string]any{
+		"name":    a.cfg.Name,
+		"bot_url": a.botURL(),
+	})
 }
 
 // allow is a simple sliding-window rate limiter keyed by string.
@@ -160,38 +154,6 @@ func (a *API) allow(m *map[string][]time.Time, key string, limit int, window tim
 	}
 	(*m)[key] = append(recent, now)
 	return true
-}
-
-func (a *API) register(w http.ResponseWriter, r *http.Request) {
-	if !a.cfg.OpenRegistration {
-		errJSON(w, 403, msg(r, "regClosed"))
-		return
-	}
-	ip := clientIP(r)
-	if !a.allowRegister(ip) {
-		errJSON(w, 429, msg(r, "regTooMany"))
-		return
-	}
-	var req struct {
-		Device string `json:"device"`
-	}
-	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req)
-	name := strings.TrimSpace(req.Device)
-	if len(name) > 64 {
-		name = name[:64]
-	}
-	if name == "" {
-		name = "app"
-	}
-	u, err := a.store.Create(name, "app")
-	if err != nil {
-		errJSON(w, 500, err.Error())
-		return
-	}
-	writeJSON(w, 200, map[string]any{
-		"key":              u.Key,
-		"subscription_url": a.baseURL(r) + "/sub/" + u.Key,
-	})
 }
 
 // load counts active users per assigned proxy.
@@ -310,7 +272,6 @@ func (a *API) admin(next http.HandlerFunc) http.HandlerFunc {
 type userView struct {
 	store.User
 	SubscriptionURL string         `json:"subscription_url"`
-	IOSURL          string         `json:"ios_url"`
 	Assigned        []assignedView `json:"assigned"`
 }
 
@@ -321,7 +282,7 @@ type assignedView struct {
 }
 
 func (a *API) view(r *http.Request, u store.User) userView {
-	v := userView{User: u, SubscriptionURL: a.baseURL(r) + "/sub/" + u.Key, IOSURL: a.baseURL(r) + "/ios#" + u.Key}
+	v := userView{User: u, SubscriptionURL: a.baseURL(r) + "/sub/" + u.Key}
 	v.Assigned = []assignedView{}
 	for _, id := range u.Proxies {
 		if px, ok := a.pool.Get(id); ok {
@@ -424,9 +385,9 @@ func (a *API) status(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, map[string]any{
-		"proxies_total":     total,
-		"proxies_alive":     alive,
-		"proxies_dir":       a.pool.Dir(),
-		"open_registration": a.cfg.OpenRegistration,
+		"proxies_total": total,
+		"proxies_alive": alive,
+		"proxies_dir":   a.pool.Dir(),
+		"bot_url":       a.botURL(),
 	})
 }

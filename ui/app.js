@@ -19,6 +19,7 @@ function androidBridge(A) {
     version: async () => A.version(),
     http: async (method, url, body) => JSON.parse(A.http(method, url, body || '')),
     setLang: async (l) => { if (A.setLang) A.setLang(l); },
+    openUrl: async (u) => { A.openUrl(u); },
   };
 }
 
@@ -37,6 +38,7 @@ function desktopBridge() {
     version: () => app().Version(),
     http: async (method, url, body) => JSON.parse(await app().HTTP(method, url, body || '')),
     setLang: (l) => app().SetLang(l),
+    openUrl: (u) => app().OpenURL(u),
   };
 }
 
@@ -52,6 +54,7 @@ function mockBridge() {
     status: async () => state,
     logs: async () => '(browser preview)',
     deviceName: async () => 'browser',
+    openUrl: async (u) => { window.open(u, '_blank'); },
     version: async () => 'preview',
     http: async (method, url, body) => {
       const r = await fetch(url, { method, body: body || undefined, headers: { 'Content-Type': 'application/json' } });
@@ -76,6 +79,7 @@ let platform = 'browser';
 let store = { profiles: [], selected: null, mode: 'tun', serverUrl: DEFAULT_SERVER, bypassLan: true };
 let status = { state: 'stopped', error: '' };
 let busy = false;
+let botUrl = '';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -197,14 +201,17 @@ async function addSubscription(url) {
   render();
 }
 
-async function getFromServer() {
+// fetchInfo asks our server for the Telegram bot link (shown when the list is empty)
+async function fetchInfo() {
   const base = (store.serverUrl || DEFAULT_SERVER).replace(/\/+$/, '');
-  const device = await Native.deviceName().catch(() => '');
-  const data = await httpJSON('POST', base + '/api/v1/register', { device: device + ' (' + platform + ')' });
-  const fresh = await syncSubscription(data.subscription_url);
-  if (fresh[0]) store.selected = fresh[0].id;
-  await save();
-  render();
+  try {
+    const info = await httpJSON('GET', base + '/api/v1/info');
+    botUrl = /^https:\/\/t\.me\/\w+$/.test(info.bot_url || '') ? info.bot_url : '';
+  } catch (e) {
+    botUrl = '';
+  }
+  $('openBot').hidden = !botUrl;
+  $('openBot2').hidden = !botUrl;
 }
 
 // refreshProfile updates the whole subscription the profile belongs to
@@ -450,11 +457,10 @@ function bind() {
     };
   });
 
-  const doGet = async (btn) => {
-    if (await withButton(btn, getFromServer)) { closeSheets(); toast(t('gotFromServer')); }
-  };
-  $('getFromServer').onclick = () => doGet($('getFromServer'));
-  $('quickGet').onclick = () => doGet($('quickGet'));
+  const openBot = () => { if (botUrl) Native.openUrl(botUrl).catch((e) => toast(String(e.message || e))); };
+  $('openBot').onclick = openBot;
+  $('openBot2').onclick = openBot;
+  $('emptyAdd').onclick = () => openSheet('addSheet');
 
   $('addSub').onclick = async () => {
     if (await withButton($('addSub'), () => addSubscription($('subUrl').value))) {
@@ -528,6 +534,7 @@ function bind() {
   $('serverUrl').addEventListener('change', async () => {
     store.serverUrl = $('serverUrl').value.trim().replace(/\/+$/, '') || DEFAULT_SERVER;
     await save();
+    fetchInfo();
   });
   $('langSel').addEventListener('change', async () => {
     store.lang = $('langSel').value;
@@ -556,6 +563,7 @@ async function init() {
   Native.version().then((v) => { $('version').textContent = v; }).catch(() => {});
   bind();
   render();
+  fetchInfo();
   await pollStatus();
   setInterval(pollStatus, 1000);
 }

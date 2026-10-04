@@ -15,15 +15,16 @@ import (
 )
 
 type User struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	Key       string            `json:"key"`
-	Proxies   map[string]string `json:"proxies,omitempty"` // country -> proxy ID from the pool
-	Disabled  bool              `json:"disabled"`
-	CreatedAt time.Time         `json:"created_at"`
-	LastSeen  time.Time         `json:"last_seen,omitempty"`
-	LastIP    string            `json:"last_ip,omitempty"`
-	Source    string            `json:"source,omitempty"` // "admin" or "app"
+	ID         string            `json:"id"`
+	Name       string            `json:"name"`
+	Key        string            `json:"key"`
+	Proxies    map[string]string `json:"proxies,omitempty"` // country -> proxy ID from the pool
+	Disabled   bool              `json:"disabled"`
+	CreatedAt  time.Time         `json:"created_at"`
+	LastSeen   time.Time         `json:"last_seen,omitempty"`
+	LastIP     string            `json:"last_ip,omitempty"`
+	Source     string            `json:"source,omitempty"` // "admin", "telegram" (old: "app")
+	TelegramID int64             `json:"telegram_id,omitempty"`
 }
 
 var ErrNotFound = errors.New("user not found")
@@ -131,6 +132,47 @@ func (s *Store) SetDisabled(id string, disabled bool) error {
 	err := s.saveLocked()
 	s.mu.Unlock()
 	return err
+}
+
+// ForTelegram returns the user bound to a Telegram account, creating it if needed.
+func (s *Store) ForTelegram(tgID int64, name string) (User, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, u := range s.users {
+		if u.TelegramID == tgID {
+			if name != "" && u.Name != name {
+				u.Name = name
+				_ = s.saveLocked()
+			}
+			return *u, false, nil
+		}
+	}
+	id := randomHex(4)
+	for s.users[id] != nil {
+		id = randomHex(4)
+	}
+	if name == "" {
+		name = "telegram"
+	}
+	u := &User{ID: id, Name: name, Key: randomToken(24), CreatedAt: time.Now().UTC(), Source: "telegram", TelegramID: tgID}
+	s.users[id] = u
+	if err := s.saveLocked(); err != nil {
+		delete(s.users, id)
+		return User{}, false, err
+	}
+	return *u, true, nil
+}
+
+// RotateKey issues a new access key; the old subscription link stops working.
+func (s *Store) RotateKey(id string) (User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u := s.users[id]
+	if u == nil {
+		return User{}, ErrNotFound
+	}
+	u.Key = randomToken(24)
+	return *u, s.saveLocked()
 }
 
 // SetProxies stores the user's assigned proxies (country -> proxy ID).

@@ -56,7 +56,7 @@ jobs:
           if [[ "$GITHUB_EVENT_NAME" != push ]]; then echo "server=false" >> $GITHUB_OUTPUT; exit 0; fi
           if [[ -z "$BEFORE" || "$BEFORE" =~ ^0+$ ]] || ! git cat-file -e "$BEFORE" 2>/dev/null; then
             CHANGED=true
-          elif git diff --name-only "$BEFORE" "$GITHUB_SHA" | grep -qE '^(server/|deploy/|go\.mod$|\.github/workflows/deploy\.yml$)'; then
+          elif git diff --name-only "$BEFORE" "$GITHUB_SHA" | grep -qE '^(server/|bot/|deploy/|go\.mod$|\.github/workflows/deploy\.yml$)'; then
             CHANGED=true
           else
             CHANGED=false
@@ -76,7 +76,7 @@ jobs:
       - name: Resolve modules
         run: go mod tidy
       - name: Vet
-        run: go vet ./core/... ./server/... ./ui/... ./mobile/... ./tools/...
+        run: go vet ./core/... ./server/... ./bot/... ./ui/... ./mobile/... ./tools/...
       - name: Build server
         env:
           CGO_ENABLED: "0"
@@ -94,7 +94,7 @@ jobs:
           (sudo -u nobody /tmp/runconfig /tmp/upstream.json > /tmp/upstream.log 2>&1 &)
           sleep 2
           curl -fsS --max-time 20 -x socks5h://up:pp@127.0.0.1:21080 https://www.google.com -o /dev/null -w "upstream ok: %{http_code}\n"
-      - name: Smoke test (proxies from folder)
+      - name: Smoke test (proxies from folder, links issued through the bot API)
         run: |
           mkdir -p /tmp/tvpn/proxies
           cat > /tmp/tvpn/proxies/list.txt <<'EOF'
@@ -103,17 +103,29 @@ jobs:
           wrong:creds@127.0.0.1:21080
           garbage
           EOF
-          TVPN_ADMIN_TOKEN=0123456789abcdef0123 TVPN_DATA_DIR=/tmp/tvpn TVPN_PROXIES_DIR=/tmp/tvpn/proxies \
-          TVPN_API_LISTEN=127.0.0.1:18090 TVPN_OPEN_REGISTRATION=true ./dist/tainavpn-server > /tmp/server.log 2>&1 &
+          TVPN_ADMIN_TOKEN=0123456789abcdef0123 TVPN_BOT_SECRET=botsecret0123 TVPN_DATA_DIR=/tmp/tvpn TVPN_PROXIES_DIR=/tmp/tvpn/proxies \
+          TVPN_PUBLIC_URL=http://127.0.0.1:18090 TVPN_API_LISTEN=127.0.0.1:18090 ./dist/tainavpn-server > /tmp/server.log 2>&1 &
           sleep 4
           curl -fsS http://127.0.0.1:18090/api/v1/info
+          # app self-registration is gone, admin panel moved
+          [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18090/api/v1/register)" != 200 ] || { echo "::error::register must be removed"; exit 1; }
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18090/adminadminadmin)" = 200 ] || { echo "::error::admin panel not at /adminadminadmin"; exit 1; }
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18090/panel)" != 200 ] || { echo "::error::old admin path still works"; exit 1; }
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18090/ios)" != 200 ] || { echo "::error::iOS page must be disabled"; exit 1; }
+          # bot API: wrong secret and requests through nginx are refused
+          [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Authorization: Bearer nope' -d '{"telegram_id":1}' http://127.0.0.1:18090/api/bot/subscription)" = 401 ]
+          [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Authorization: Bearer botsecret0123' -H 'X-Real-IP: 1.2.3.4' -d '{"telegram_id":1}' http://127.0.0.1:18090/api/bot/subscription)" = 404 ]
           for i in 1 2 3; do
-            SUB=$(curl -fsS -X POST -d "{\"device\":\"ci$i\"}" http://127.0.0.1:18090/api/v1/register | python3 -c 'import json,sys;print(json.load(sys.stdin)["subscription_url"])')
+            SUB=$(curl -fsS -X POST -H 'Authorization: Bearer botsecret0123' -d "{\"telegram_id\":$i,\"name\":\"ci$i\"}" http://127.0.0.1:18090/api/bot/subscription | python3 -c 'import json,sys;print(json.load(sys.stdin)["subscription_url"])')
             CFG=$(curl -fsS "$SUB")
             echo "$CFG"
             # every user must get the working proxy from the folder, never the dead one
             echo "$CFG" | python3 -c 'import json,sys;p=json.load(sys.stdin)["proxies"][0];assert (p["server"],p["port"],p["username"])==("127.0.0.1",21080,"up"),p'
           done
+          # same Telegram user -> same link; rotate -> new link, old one stops working
+          A=$(curl -fsS -X POST -H 'Authorization: Bearer botsecret0123' -d '{"telegram_id":1}' http://127.0.0.1:18090/api/bot/subscription | python3 -c 'import json,sys;print(json.load(sys.stdin)["subscription_url"])')
+          B=$(curl -fsS -X POST -H 'Authorization: Bearer botsecret0123' -d '{"telegram_id":1,"rotate":true}' http://127.0.0.1:18090/api/bot/subscription | python3 -c 'import json,sys;print(json.load(sys.stdin)["subscription_url"])')
+          [ "$A" != "$B" ] && [ "$(curl -s -o /dev/null -w '%{http_code}' "$A")" = 404 ] && [ "$(curl -s -o /dev/null -w '%{http_code}' "$B")" = 200 ] || { echo "::error::rotate failed"; exit 1; }
           # country of the upstream proxy is detected through the proxy itself (runner is in the US)
           for i in $(seq 1 20); do
             C=$(curl -fsS -H "Authorization: Bearer 0123456789abcdef0123" http://127.0.0.1:18090/api/admin/proxies | python3 -c 'import json,sys;print(" ".join(p.get("country","") for p in json.load(sys.stdin)["proxies"] if p["username"]=="up"))')
@@ -124,16 +136,31 @@ jobs:
           CFG=$(curl -fsS "$SUB")
           echo "$CFG" | python3 -c 'import json,sys;p=json.load(sys.stdin)["proxies"];print(p);assert len(p)==1 and p[0]["country"] and p[0]["name"].split()[1]'
           echo "$CFG" > /tmp/sub.json
-          KEY=${SUB##*/sub/}
-          echo "$KEY" > /tmp/key
-          # iPhone formats: base64 share-link list and a full sing-box profile
-          LINKS=$(curl -fsS "http://127.0.0.1:18090/sub/$KEY/links" | base64 -d)
-          echo "links: $LINKS"
-          [[ "$LINKS" == "socks://up:pp@127.0.0.1:21080#"* ]] || { echo "::error::unexpected share link: $LINKS"; exit 1; }
-          curl -fsS "http://127.0.0.1:18090/sub/$KEY/singbox" > /tmp/ios-profile.json
-          curl -fsS -o /dev/null http://127.0.0.1:18090/ios
-          curl -fsS -H "Authorization: Bearer 0123456789abcdef0123" http://127.0.0.1:18090/api/admin/proxies
           cat /tmp/server.log
+      - name: Telegram bot test (fake Telegram API)
+        timeout-minutes: 3
+        run: |
+          go build -o /tmp/tainavpn-bot ./bot
+          mkdir -p /tmp/dl && echo "fake apk" > /tmp/dl/Tainavpn-0.0.0-android.apk
+          cd /tmp && python3 "$GITHUB_WORKSPACE/tools/fake_telegram/fake_tg.py" 18199 ru &
+          sleep 1
+          cd /tmp && TVPN_BOT_TOKEN=TEST TVPN_BOT_SECRET=botsecret0123 TVPN_TG_API=http://127.0.0.1:18199 \
+            TVPN_SERVER_API=http://127.0.0.1:18090 TVPN_DOWNLOADS_DIR=/tmp/dl /tmp/tainavpn-bot > /tmp/bot.log 2>&1 &
+          sleep 15
+          cat /tmp/bot.log
+          python3 - <<'EOF'
+          import json
+          calls = [json.loads(l) for l in open("/tmp/calls.jsonl")]
+          msgs = [c["text"] for c in calls if c["method"] == "sendMessage"]
+          docs = [c for c in calls if c["method"] == "sendDocument"]
+          for m in msgs: print("MSG:", m[:120].replace("\n", " | "))
+          assert any("Tainavpn" in m for m in msgs), "no welcome"
+          links = [m for m in msgs if "/sub/" in m]
+          assert len(links) >= 2, "bot did not send subscription links"
+          assert any(d.get("has_file") for d in docs), "app file was not uploaded"
+          assert any(d.get("document") == "FILE123" for d in docs), "cached file_id was not reused"
+          print("bot ok")
+          EOF
       - name: End-to-end test of the client config (TUN -> proxy from folder)
         timeout-minutes: 3
         run: |
@@ -166,28 +193,6 @@ jobs:
           sudo pkill -INT -f "runconfig /tmp/client.json"; sleep 2
           grep -q "outbound/socks\[proxy\]" /tmp/client.log || { echo "::error::traffic did not go through the proxy"; exit 1; }
           grep -q "inbound connection" /tmp/upstream.log || { echo "::error::upstream proxy saw no connections"; exit 1; }
-      - name: End-to-end test of the iPhone profile (/sub/<key>/singbox)
-        timeout-minutes: 3
-        run: |
-          python3 - <<'EOF'
-          import json
-          cfg = json.load(open("/tmp/ios-profile.json"))
-          cfg["inbounds"][0]["exclude_uid"] = [65534]   # upstream proxy runs on this machine as "nobody"
-          cfg["log"] = {"level": "info"}
-          json.dump(cfg, open("/tmp/ios-client.json", "w"), indent=2)
-          EOF
-          finish() {
-            code=$?
-            sudo pkill -INT -f "runconfig /tmp/ios-client.json" || true
-            sleep 2
-            [ $code -eq 0 ] || echo "::error::ios profile log:%0A$(head -c 6000 /tmp/ios.log | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')"
-            tail -n 20 /tmp/ios.log
-          }
-          trap finish EXIT
-          sudo timeout 90 /tmp/runconfig /tmp/ios-client.json > /tmp/ios.log 2>&1 &
-          sleep 5
-          curl -fsS --max-time 20 https://www.google.com -o /dev/null -w "ios profile through tun: %{http_code}\n"
-          grep -q "outbound/socks\[proxy\]" /tmp/ios.log || { echo "::error::iOS profile did not use the proxy"; exit 1; }
 
   windows:
     needs: version
@@ -398,6 +403,24 @@ jobs:
             artifacts/Tainavpn-${VERSION}-windows-x64.exe \
             artifacts/Tainavpn-${VERSION}-android.apk \
             artifacts/tainavpn_${VERSION}_amd64.deb
+      - name: Upload the apps to the server (the Telegram bot sends them to users)
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          HOST: ${{ secrets.VPS_HOST }}
+          PORT: ${{ secrets.VPS_PORT }}
+          USER: ${{ secrets.VPS_USER }}
+          REMOTE_DIR: ${{ vars.VPS_DIR || '~/tainavpn' }}
+        run: |
+          if [ -z "$SSH_KEY" ] || [ -z "$HOST" ]; then echo "VPS secrets are not set, skipping"; exit 0; fi
+          mkdir -p ~/.ssh && echo "$SSH_KEY" > ~/.ssh/id_deploy && chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -p "${PORT:-22}" "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          SSH="ssh -i $HOME/.ssh/id_deploy -p ${PORT:-22} $USER@$HOST"
+          DIR=$($SSH "mkdir -p $REMOTE_DIR/downloads && cd $REMOTE_DIR/downloads && pwd")
+          scp -i ~/.ssh/id_deploy -P "${PORT:-22}" \
+            artifacts/Tainavpn-${VERSION}-windows-x64.exe artifacts/Tainavpn-${VERSION}-android.apk artifacts/tainavpn_${VERSION}_amd64.deb \
+            "$USER@$HOST:$DIR/"
+          # keep only the current version
+          $SSH "cd '$DIR' && ls | grep -v -e '${VERSION}' | xargs -r rm -f && ls -la"
       - name: Delete workflow artifacts (they are in the release now)
         run: |
           gh api --paginate "repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" --jq '.artifacts[].id' |

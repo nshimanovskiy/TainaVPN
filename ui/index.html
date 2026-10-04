@@ -30,7 +30,11 @@
   <ul id="profiles" class="profiles"></ul>
   <div id="empty" class="empty" hidden>
     <p data-i18n="noProxiesYet">Прокси ещё нет.</p>
-    <button id="quickGet" class="btn" data-i18n="getFromServer">Получить прокси с сервера</button>
+    <p class="hint" data-i18n="getLinkInBot">Ссылку-подписку выдаёт наш Telegram-бот. Добавьте её через «+ Добавить».</p>
+    <div class="empty-actions">
+      <button id="openBot" class="btn" data-i18n="openBot" hidden>Открыть Telegram-бота</button>
+      <button id="emptyAdd" class="btn ghost" data-i18n="addByLinkShort">Добавить по ссылке</button>
+    </div>
   </div>
 </main>
 
@@ -39,14 +43,14 @@
   <div class="sheet-card">
     <div class="sheet-head"><h3 data-i18n="addProxy">Добавить прокси</h3><button class="icon close" data-close data-i18n-title="close">✕</button></div>
     <div class="tabs">
-      <button class="tab active" data-tab="server" data-i18n="tabServer">С сервера</button>
+      <button class="tab active" data-tab="server" data-i18n="tabByLink">По ссылке</button>
       <button class="tab" data-tab="manual" data-i18n="tabManual">Свой прокси</button>
     </div>
     <div class="tab-body" data-body="server">
-      <button id="getFromServer" class="btn wide" data-i18n="getFromServer">Получить прокси с сервера</button>
-      <p class="hint" data-i18n="orPasteLink">или вставьте ссылку-подписку, которую выдал администратор</p>
+      <p class="hint" data-i18n="pasteLinkHint">Вставьте ссылку-подписку из Telegram-бота</p>
       <input id="subUrl" data-i18n-ph="subUrlPh" placeholder="https://…/sub/ключ" autocomplete="off" autocapitalize="off" spellcheck="false">
-      <button id="addSub" class="btn ghost wide" data-i18n="addByLink">Добавить по ссылке</button>
+      <button id="addSub" class="btn wide" data-i18n="addByLink">Добавить по ссылке</button>
+      <button id="openBot2" class="btn ghost wide" data-i18n="openBot" hidden>Открыть Telegram-бота</button>
     </div>
     <div class="tab-body" data-body="manual" hidden>
       <input id="mLink" data-i18n-ph="manualLinkPh" placeholder="логин:пароль@хост:порт" autocomplete="off" autocapitalize="off" spellcheck="false">
