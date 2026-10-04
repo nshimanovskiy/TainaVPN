@@ -51,7 +51,7 @@ class MainActivity : Activity() {
                 TainaVpnService.start(this)
             } else {
                 VpnState.state = "stopped"
-                VpnState.error = "Разрешение на VPN не выдано"
+                VpnState.error = Lang.get(this, "vpnDenied")
             }
         }
     }
@@ -94,6 +94,11 @@ class MainActivity : Activity() {
                 VpnState.state = "stopped"
                 e.message ?: e.toString()
             }
+        }
+
+        @JavascriptInterface
+        fun setLang(lang: String) {
+            Lang.set(this@MainActivity, lang)
         }
 
         @JavascriptInterface

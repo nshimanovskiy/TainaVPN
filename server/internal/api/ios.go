@@ -31,16 +31,16 @@ var icon512 []byte
 func (a *API) resolve(w http.ResponseWriter, r *http.Request) (store.User, []pool.Proxy, bool) {
 	u, ok := a.store.ByKey(r.PathValue("key"), clientIP(r))
 	if !ok {
-		errJSON(w, 404, "unknown key")
+		errJSON(w, 404, msg(r, "unknownKey"))
 		return u, nil, false
 	}
 	if u.Disabled {
-		errJSON(w, 403, "key is disabled")
+		errJSON(w, 403, msg(r, "keyDisabled"))
 		return u, nil, false
 	}
 	list, err := a.assign(u, false)
 	if err != nil {
-		errJSON(w, 503, err.Error())
+		errJSON(w, 503, msg(r, "noProxies"))
 		return u, nil, false
 	}
 	return u, list, true

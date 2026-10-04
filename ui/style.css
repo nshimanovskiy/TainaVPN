@@ -106,7 +106,7 @@ select {
 .toast {
   position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0)); transform: translateX(-50%);
   background: var(--card2); border: 1px solid var(--line); padding: 10px 16px; border-radius: 10px; z-index: 20;
-  max-width: calc(100% - 32px); font-size: 14px;
+  width: max-content; max-width: calc(100% - 32px); font-size: 14px; text-align: center;
 }
 .status-line { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 4px; max-width: 100%; }
 .status-line .status-sub { margin-top: 0; }

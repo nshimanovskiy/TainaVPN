@@ -164,12 +164,12 @@ func (a *API) allow(m *map[string][]time.Time, key string, limit int, window tim
 
 func (a *API) register(w http.ResponseWriter, r *http.Request) {
 	if !a.cfg.OpenRegistration {
-		errJSON(w, 403, "registration is closed, ask the administrator for a key")
+		errJSON(w, 403, msg(r, "regClosed"))
 		return
 	}
 	ip := clientIP(r)
 	if !a.allowRegister(ip) {
-		errJSON(w, 429, "too many registrations from this IP, try tomorrow")
+		errJSON(w, 429, msg(r, "regTooMany"))
 		return
 	}
 	var req struct {
@@ -243,13 +243,15 @@ func (a *API) assign(u store.User, force bool) ([]pool.Proxy, error) {
 		out = append(out, px)
 	}
 	if len(out) == 0 {
-		return nil, errors.New("на сервере сейчас нет свободных прокси, попробуйте позже")
+		return nil, errNoProxies
 	}
 	if !sameMap(next, u.Proxies) {
 		_ = a.store.SetProxies(u.ID, next)
 	}
 	return out, nil
 }
+
+var errNoProxies = errors.New("no proxies available")
 
 func sameMap(a, b map[string]string) bool {
 	if len(a) != len(b) {
@@ -386,7 +388,7 @@ func (a *API) reassign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := a.assign(target, true); err != nil {
-		errJSON(w, 503, err.Error())
+		errJSON(w, 503, msg(r, "noProxies"))
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})

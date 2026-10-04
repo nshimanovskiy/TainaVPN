@@ -18,6 +18,7 @@ function androidBridge(A) {
     deviceName: async () => A.deviceName(),
     version: async () => A.version(),
     http: async (method, url, body) => JSON.parse(A.http(method, url, body || '')),
+    setLang: async (l) => { if (A.setLang) A.setLang(l); },
   };
 }
 
@@ -35,6 +36,7 @@ function desktopBridge() {
     deviceName: () => app().DeviceName(),
     version: () => app().Version(),
     http: async (method, url, body) => JSON.parse(await app().HTTP(method, url, body || '')),
+    setLang: (l) => app().SetLang(l),
   };
 }
 
@@ -92,15 +94,17 @@ function toast(msg, ms = 2600) {
 // ---------- HTTP helpers (performed natively: no CORS, works when VPN is off) ----------
 
 async function httpJSON(method, url, body) {
+  // tell our server which language to answer errors in
+  if (/\/(api\/v1\/|sub\/)/.test(url)) url += (url.includes('?') ? '&' : '?') + 'lang=' + LANG;
   let res;
   try {
     res = await Native.http(method, url, body ? JSON.stringify(body) : '');
   } catch (e) {
-    throw new Error('Нет связи с сервером: ' + (e.message || e));
+    throw new Error(t('errNoConnection', e.message || e));
   }
-  if (res.error) throw new Error('Нет связи с сервером: ' + res.error);
+  if (res.error) throw new Error(t('errNoConnection', res.error));
   let data = {};
-  try { data = JSON.parse(res.body || '{}'); } catch { throw new Error('Неверный ответ сервера (HTTP ' + res.status + ')'); }
+  try { data = JSON.parse(res.body || '{}'); } catch { throw new Error(t('errBadResponse', res.status)); }
   if (res.status < 200 || res.status >= 300) throw new Error(data.error || ('HTTP ' + res.status));
   return data;
 }
@@ -141,7 +145,7 @@ function validProxy(p) {
 async function fetchSubscription(url) {
   const data = await httpJSON('GET', url);
   const list = (data.proxies || []).filter((p) => !p.type || p.type === 'socks' || p.type === 'http');
-  if (!list.length) throw new Error('В подписке нет прокси');
+  if (!list.length) throw new Error(t('errEmptySub'));
   const seen = {};
   return list.map((p, i) => {
     const country = (p.country || '').toUpperCase();
@@ -186,7 +190,7 @@ async function syncSubscription(url) {
 
 async function addSubscription(url) {
   url = url.trim();
-  if (!/^https?:\/\//i.test(url)) throw new Error('Ссылка должна начинаться с https://');
+  if (!/^https?:\/\//i.test(url)) throw new Error(t('errLinkHttps'));
   const fresh = await syncSubscription(url);
   if (fresh[0] && !store.profiles.find((p) => p.id === store.selected && p.sub)) store.selected = fresh[0].id;
   await save();
@@ -225,14 +229,26 @@ async function detectCountry(p) {
 
 // ---------- flags & names ----------
 
-const regionNames = (() => { try { return new Intl.DisplayNames(['ru'], { type: 'region' }); } catch { return null; } })();
+const regionNamesCache = {};
+function regionName(cc) {
+  try {
+    if (!regionNamesCache[LANG]) regionNamesCache[LANG] = new Intl.DisplayNames([LANG], { type: 'region' });
+    const n = regionNamesCache[LANG].of(cc);
+    return n && n !== cc ? n : '';
+  } catch { return ''; }
+}
 
+// countryName is shown in the UI language; the server-provided (Russian) name is a fallback
 function countryName(p) {
   const cc = (p.country || '').toUpperCase();
+  if (cc) {
+    if (LANG === 'en' && cc === 'US') return 'USA';
+    if (LANG === 'ru' && cc === 'US') return 'США';
+    const n = regionName(cc);
+    if (n) return n;
+  }
   if (p.sub && p.name) return p.name;
-  if (p.countryName) return p.countryName;
-  if (cc && regionNames) { try { return regionNames.of(cc); } catch {} }
-  return '';
+  return p.countryName || '';
 }
 
 function flagSrc(cc) {
@@ -243,7 +259,7 @@ function flagSrc(cc) {
 // profileTitle: what the user sees — the country, or a fallback name
 function profileTitle(p) {
   const name = countryName(p);
-  if (p.sub) return name || 'Сервер';
+  if (p.sub) return name || t('serverFallback');
   return name || p.label || p.name || p.server;
 }
 
@@ -305,7 +321,7 @@ function buildConfig(p) {
 
 async function connect() {
   const p = store.profiles.find((x) => x.id === store.selected);
-  if (!p) { toast('Сначала добавьте прокси'); openSheet('addSheet'); return; }
+  if (!p) { toast(t('addProxyFirst')); openSheet('addSheet'); return; }
   busy = true;
   status = { state: 'starting', error: '' };
   renderStatus();
@@ -346,14 +362,14 @@ function renderStatus() {
   const pw = $('power');
   pw.className = 'power';
   const p = store.profiles.find((x) => x.id === store.selected);
-  let text = 'Отключено';
-  let sub = p ? profileTitle(p) : 'Добавьте прокси';
+  let text = t('disconnected');
+  let sub = p ? profileTitle(p) : t('addProxyFirst');
   switch (status.state) {
-    case 'running': pw.classList.add('on'); text = 'Подключено'; break;
-    case 'starting': pw.classList.add('busy'); text = 'Подключение…'; break;
-    case 'stopping': pw.classList.add('busy'); text = 'Отключение…'; break;
+    case 'running': pw.classList.add('on'); text = t('connected'); break;
+    case 'starting': pw.classList.add('busy'); text = t('connecting'); break;
+    case 'stopping': pw.classList.add('busy'); text = t('disconnecting'); break;
     default:
-      if (status.error) { pw.classList.add('err'); text = 'Ошибка'; sub = status.error; }
+      if (status.error) { pw.classList.add('err'); text = t('error'); sub = status.error; }
   }
   $('statusText').textContent = text;
   $('statusFlag').hidden = !p || (status.error && status.state === 'stopped');
@@ -369,25 +385,31 @@ function render() {
       <img class="flag" src="${flagSrc(p.country)}" alt="">
       <div class="p-main">
         <div class="p-name">${esc(profileTitle(p))}</div>
-        <div class="p-sub">${p.sub ? 'Tainavpn' : 'свой прокси' + (p.label && countryName(p) ? ' · ' + esc(p.label) : '') + ' · ' + esc(p.server) + ':' + esc(p.port)}</div>
+        <div class="p-sub">${p.sub ? 'Tainavpn' : t('ownProxy') + (p.label && countryName(p) ? ' · ' + esc(p.label) : '') + ' · ' + esc(p.server) + ':' + esc(p.port)}</div>
       </div>
       <div class="p-act">
-        ${p.sub ? '<button data-act="refresh" title="Обновить список с сервера">↻</button>' : ''}
-        <button data-act="delete" title="Удалить">✕</button>
+        ${p.sub ? `<button data-act="refresh" title="${esc(t('refreshList'))}">↻</button>` : ''}
+        <button data-act="delete" title="${esc(t('delete'))}">✕</button>
       </div>
     </li>`).join('');
   $('empty').hidden = store.profiles.length > 0;
   renderStatus();
 }
 
+function applyLang() {
+  setLang(store.lang || 'auto');
+  if (Native && Native.setLang) Native.setLang(LANG).catch(() => {});
+}
+
 function renderSettings() {
+  $('langSel').value = store.lang || 'auto';
   $('serverUrl').value = store.serverUrl || DEFAULT_SERVER;
   $('bypassLan').checked = !!store.bypassLan;
   $('modeBox').hidden = platform === 'android';
   document.querySelectorAll('.seg button').forEach((b) => b.classList.toggle('active', b.dataset.mode === store.mode));
   $('modeHint').textContent = store.mode === 'tun'
-    ? (platform === 'windows' ? 'Весь трафик устройства. Нужны права администратора.' : 'Весь трафик устройства. Нужны права root / CAP_NET_ADMIN.')
-    : 'Только программы, которые используют системный прокси (браузеры и т.п.). Права не нужны.';
+    ? (platform === 'windows' ? t('modeHintTunWin') : t('modeHintTunLinux'))
+    : t('modeHintProxy');
 }
 
 function openSheet(id) {
@@ -403,7 +425,7 @@ function closeSheets() { document.querySelectorAll('.sheet').forEach((s) => { s.
 async function withButton(btn, fn) {
   const old = btn.textContent;
   btn.disabled = true;
-  btn.textContent = 'Подождите…';
+  btn.textContent = t('pleaseWait');
   $('addErr').textContent = '';
   try { await fn(); return true; } catch (e) { $('addErr').textContent = String(e.message || e); toast(String(e.message || e)); return false; } finally { btn.disabled = false; btn.textContent = old; }
 }
@@ -429,7 +451,7 @@ function bind() {
   });
 
   const doGet = async (btn) => {
-    if (await withButton(btn, getFromServer)) { closeSheets(); toast('Прокси получен с сервера'); }
+    if (await withButton(btn, getFromServer)) { closeSheets(); toast(t('gotFromServer')); }
   };
   $('getFromServer').onclick = () => doGet($('getFromServer'));
   $('quickGet').onclick = () => doGet($('quickGet'));
@@ -438,7 +460,7 @@ function bind() {
     if (await withButton($('addSub'), () => addSubscription($('subUrl').value))) {
       $('subUrl').value = '';
       closeSheets();
-      toast('Добавлено');
+      toast(t('added'));
     }
   };
 
@@ -461,11 +483,11 @@ function bind() {
       username: $('mUser').value.trim(),
       password: $('mPass').value,
     };
-    if (!validProxy(p)) { $('addErr').textContent = 'Укажите корректные хост и порт'; return; }
+    if (!validProxy(p)) { $('addErr').textContent = t('errHostPort'); return; }
     p.label = p.name; // user's own title, if any
-    const btn = $('addManual'); btn.disabled = true; btn.textContent = 'Определяем страну…';
+    const btn = $('addManual'); btn.disabled = true; btn.textContent = t('detectingCountry');
     await detectCountry(p);
-    btn.disabled = false; btn.textContent = 'Сохранить';
+    btn.disabled = false; btn.textContent = t('save');
     if (!p.country && !p.label) p.label = p.server;
     store.profiles.push(p);
     if (!store.selected) store.selected = p.id;
@@ -473,7 +495,7 @@ function bind() {
     ['mLink', 'mName', 'mHost', 'mPort', 'mUser', 'mPass'].forEach((id) => { $(id).value = ''; });
     closeSheets();
     render();
-    toast('Прокси сохранён');
+    toast(t('proxySaved'));
   };
 
   $('profiles').addEventListener('click', async (e) => {
@@ -483,10 +505,10 @@ function bind() {
     const act = e.target.closest('button')?.dataset.act;
     if (act === 'delete') {
       if (p.sub) {
-        if (!confirm('Удалить все прокси, полученные с сервера?')) return;
+        if (!confirm(t('confirmDeleteServer'))) return;
         store.profiles = store.profiles.filter((x) => x.sub !== p.sub);
       } else {
-        if (!confirm(`Удалить «${profileTitle(p)}»?`)) return;
+        if (!confirm(t('confirmDelete', profileTitle(p)))) return;
         store.profiles = store.profiles.filter((x) => x !== p);
       }
       if (store.selected === p.id) store.selected = store.profiles[0]?.id || null;
@@ -494,24 +516,31 @@ function bind() {
       return;
     }
     if (act === 'refresh') {
-      try { await syncSubscription(p.sub); render(); toast('Список обновлён'); } catch (err) { toast(err.message); }
+      try { await syncSubscription(p.sub); render(); toast(t('listUpdated')); } catch (err) { toast(err.message); }
       return;
     }
     if (store.selected === p.id) return;
     store.selected = p.id;
     await save(); render();
-    if (status.state === 'running') { toast('Переподключение…'); await connect(); }
+    if (status.state === 'running') { toast(t('reconnecting')); await connect(); }
   });
 
   $('serverUrl').addEventListener('change', async () => {
     store.serverUrl = $('serverUrl').value.trim().replace(/\/+$/, '') || DEFAULT_SERVER;
     await save();
   });
+  $('langSel').addEventListener('change', async () => {
+    store.lang = $('langSel').value;
+    await save();
+    applyLang();
+    render();
+    renderSettings();
+  });
   $('bypassLan').addEventListener('change', async () => { store.bypassLan = $('bypassLan').checked; await save(); });
   document.querySelectorAll('.seg button').forEach((b) => {
     b.onclick = async () => {
       store.mode = b.dataset.mode; await save(); renderSettings();
-      if (status.state === 'running') toast('Переподключитесь, чтобы применить режим');
+      if (status.state === 'running') toast(t('reconnectForMode'));
     };
   });
 }
@@ -523,6 +552,7 @@ async function init() {
     const raw = await Native.loadStore();
     if (raw) store = { ...store, ...JSON.parse(raw) };
   } catch (e) { console.warn('bad store', e); }
+  applyLang();
   Native.version().then((v) => { $('version').textContent = v; }).catch(() => {});
   bind();
   render();

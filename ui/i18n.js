@@ -1,0 +1,161 @@
+'use strict';
+
+// Interface strings. Add a language by adding another block with the same keys.
+const I18N = {
+  ru: {
+    connect: 'Подключить',
+    disconnected: 'Отключено',
+    connected: 'Подключено',
+    connecting: 'Подключение…',
+    disconnecting: 'Отключение…',
+    error: 'Ошибка',
+    proxies: 'Прокси',
+    add: '+ Добавить',
+    noProxiesYet: 'Прокси ещё нет.',
+    getFromServer: 'Получить прокси с сервера',
+    addProxy: 'Добавить прокси',
+    tabServer: 'С сервера',
+    tabManual: 'Свой прокси',
+    orPasteLink: 'или вставьте ссылку-подписку, которую выдал администратор',
+    subUrlPh: 'https://…/sub/ключ',
+    addByLink: 'Добавить по ссылке',
+    manualLinkPh: 'логин:пароль@хост:порт',
+    orFillFields: 'или заполните поля',
+    namePh: 'Название (необязательно)',
+    hostPh: 'Хост / IP',
+    portPh: 'Порт',
+    userPh: 'Логин (если есть)',
+    passPh: 'Пароль',
+    save: 'Сохранить',
+    settings: 'Настройки',
+    serverAddress: 'Адрес сервера Tainavpn',
+    mode: 'Режим',
+    modeTun: 'Весь трафик (TUN)',
+    modeProxy: 'Системный прокси',
+    modeHintTunWin: 'Весь трафик устройства. Нужны права администратора.',
+    modeHintTunLinux: 'Весь трафик устройства. Нужны права root / CAP_NET_ADMIN.',
+    modeHintProxy: 'Только программы, которые используют системный прокси (браузеры и т.п.). Права не нужны.',
+    bypassLan: 'Локальная сеть напрямую',
+    language: 'Язык',
+    langAuto: 'Как в системе',
+    coreLogs: 'Логи ядра',
+    close: 'Закрыть',
+    refreshList: 'Обновить список с сервера',
+    delete: 'Удалить',
+    ownProxy: 'свой прокси',
+    serverFallback: 'Сервер',
+    pleaseWait: 'Подождите…',
+    detectingCountry: 'Определяем страну…',
+    errNoConnection: 'Нет связи с сервером: {0}',
+    errBadResponse: 'Неверный ответ сервера (HTTP {0})',
+    errEmptySub: 'В подписке нет прокси',
+    errLinkHttps: 'Ссылка должна начинаться с https://',
+    errHostPort: 'Укажите корректные хост и порт',
+    addProxyFirst: 'Сначала добавьте прокси',
+    gotFromServer: 'Прокси получены с сервера',
+    added: 'Добавлено',
+    proxySaved: 'Прокси сохранён',
+    confirmDeleteServer: 'Удалить все прокси, полученные с сервера?',
+    confirmDelete: 'Удалить «{0}»?',
+    listUpdated: 'Список обновлён',
+    reconnecting: 'Переподключение…',
+    reconnectForMode: 'Переподключитесь, чтобы применить режим',
+  },
+  en: {
+    connect: 'Connect',
+    disconnected: 'Disconnected',
+    connected: 'Connected',
+    connecting: 'Connecting…',
+    disconnecting: 'Disconnecting…',
+    error: 'Error',
+    proxies: 'Proxies',
+    add: '+ Add',
+    noProxiesYet: 'No proxies yet.',
+    getFromServer: 'Get proxies from server',
+    addProxy: 'Add proxy',
+    tabServer: 'From server',
+    tabManual: 'My own proxy',
+    orPasteLink: 'or paste the subscription link you got from the administrator',
+    subUrlPh: 'https://…/sub/key',
+    addByLink: 'Add by link',
+    manualLinkPh: 'user:password@host:port',
+    orFillFields: 'or fill in the fields',
+    namePh: 'Name (optional)',
+    hostPh: 'Host / IP',
+    portPh: 'Port',
+    userPh: 'Username (if any)',
+    passPh: 'Password',
+    save: 'Save',
+    settings: 'Settings',
+    serverAddress: 'Tainavpn server address',
+    mode: 'Mode',
+    modeTun: 'All traffic (TUN)',
+    modeProxy: 'System proxy',
+    modeHintTunWin: 'All device traffic. Requires administrator rights.',
+    modeHintTunLinux: 'All device traffic. Requires root / CAP_NET_ADMIN.',
+    modeHintProxy: 'Only apps that use the system proxy (browsers etc.). No special rights needed.',
+    bypassLan: 'Bypass local network',
+    language: 'Language',
+    langAuto: 'System default',
+    coreLogs: 'Core logs',
+    close: 'Close',
+    refreshList: 'Refresh list from server',
+    delete: 'Delete',
+    ownProxy: 'own proxy',
+    serverFallback: 'Server',
+    pleaseWait: 'Please wait…',
+    detectingCountry: 'Detecting country…',
+    errNoConnection: 'Cannot reach the server: {0}',
+    errBadResponse: 'Invalid server response (HTTP {0})',
+    errEmptySub: 'The subscription has no proxies',
+    errLinkHttps: 'The link must start with https://',
+    errHostPort: 'Enter a valid host and port',
+    addProxyFirst: 'Add a proxy first',
+    gotFromServer: 'Proxies received from server',
+    added: 'Added',
+    proxySaved: 'Proxy saved',
+    confirmDeleteServer: 'Delete all proxies received from the server?',
+    confirmDelete: 'Delete “{0}”?',
+    listUpdated: 'List updated',
+    reconnecting: 'Reconnecting…',
+    reconnectForMode: 'Reconnect to apply the mode',
+  },
+};
+
+let LANG = 'ru';
+
+function detectLang() {
+  const langs = (typeof navigator !== 'undefined' && (navigator.languages || [navigator.language])) || [];
+  for (const l of langs) {
+    const code = String(l || '').slice(0, 2).toLowerCase();
+    if (I18N[code]) return code;
+  }
+  return 'en';
+}
+
+// setLang('auto' | 'ru' | 'en')
+function setLang(pref) {
+  LANG = pref && pref !== 'auto' && I18N[pref] ? pref : detectLang();
+  if (typeof document !== 'undefined') {
+    document.documentElement.lang = LANG;
+    applyI18n(document);
+  }
+  return LANG;
+}
+
+function t(key, ...args) {
+  let s = (I18N[LANG] && I18N[LANG][key]) || I18N.en[key] || key;
+  args.forEach((a, i) => { s = s.replace('{' + i + '}', a); });
+  return s;
+}
+
+// Fills elements marked with data-i18n (text), data-i18n-ph (placeholder),
+// data-i18n-title (title) and data-i18n-aria (aria-label).
+function applyI18n(root) {
+  root.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
+  root.querySelectorAll('[data-i18n-ph]').forEach((el) => { el.placeholder = t(el.dataset.i18nPh); });
+  root.querySelectorAll('[data-i18n-title]').forEach((el) => { el.title = t(el.dataset.i18nTitle); });
+  root.querySelectorAll('[data-i18n-aria]').forEach((el) => { el.setAttribute('aria-label', t(el.dataset.i18nAria)); });
+}
+
+if (typeof module !== 'undefined') module.exports = { I18N, t, setLang };

@@ -159,10 +159,10 @@ class TainaVpnService : VpnService() {
         val n = builder
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle("Tainavpn")
-            .setContentText("Трафик идёт через прокси")
+            .setContentText(Lang.get(this, "notifText"))
             .setContentIntent(open)
             .setOngoing(true)
-            .addAction(Notification.Action.Builder(null, "Отключить", stop).build())
+            .addAction(Notification.Action.Builder(null, Lang.get(this, "disconnect"), stop).build())
             .build()
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(NOTIFY_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
