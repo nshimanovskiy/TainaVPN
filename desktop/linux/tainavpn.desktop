@@ -1,8 +1,9 @@
 [Desktop Entry]
 Type=Application
 Name=Tainavpn
-Comment=Весь трафик через SOCKS5-прокси
-Exec=@BIN@
+Comment=Весь трафик через прокси
+Exec=/usr/bin/tainavpn
 Icon=tainavpn
 Terminal=false
 Categories=Network;
+StartupWMClass=tainavpn

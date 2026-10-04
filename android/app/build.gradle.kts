@@ -3,7 +3,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val appVersionName = (System.getenv("APP_VERSION") ?: "0.1.0").removePrefix("v")
+val appVersionName = (System.getenv("APP_VERSION") ?: file("../../VERSION").readText().trim()).removePrefix("v")
 val appVersionCode = (System.getenv("APP_VERSION_CODE") ?: "1").toInt()
 
 android {
@@ -36,15 +36,6 @@ android {
         }
         debug {
             signingConfig = signingConfigs.getByName("release")
-        }
-    }
-
-    splits {
-        abi {
-            isEnable = true
-            reset()
-            include("arm64-v8a", "armeabi-v7a", "x86_64")
-            isUniversalApk = true
         }
     }
 

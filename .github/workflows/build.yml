@@ -1,9 +1,10 @@
 name: Build
 
+# Каждый push в main собирает и тестирует всё.
+# Релиз создаётся автоматически, когда в файле VERSION появляется новый номер версии.
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -15,6 +16,30 @@ env:
   XMOBILE: "1960c775504c"
 
 jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      code: ${{ steps.v.outputs.code }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V=$(tr -d ' \n\r' < VERSION)
+          [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::VERSION must look like 1.2.3"; exit 1; }
+          IFS=. read -r MA MI PA <<< "$V"
+          echo "version=$V" >> $GITHUB_OUTPUT
+          echo "code=$((MA*10000 + MI*100 + PA))" >> $GITHUB_OUTPUT
+          REL=false
+          if [[ "$GITHUB_REF" == refs/heads/main && "$GITHUB_EVENT_NAME" != pull_request ]]; then
+            gh release view "v$V" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || REL=true
+          fi
+          echo "release=$REL" >> $GITHUB_OUTPUT
+          echo "version $V, release: $REL"
+
   server:
     runs-on: ubuntu-24.04
     steps:
@@ -99,19 +124,12 @@ jobs:
           sudo pkill -INT -f "runconfig /tmp/client.json"; sleep 2
           grep -q "outbound/socks\[proxy\]" /tmp/client.log || { echo "::error::traffic did not go through the proxy"; exit 1; }
           grep -q "inbound connection" /tmp/upstream.log || { echo "::error::upstream proxy saw no connections"; exit 1; }
-      - uses: actions/upload-artifact@v4
-        with:
-          name: tainavpn-server-linux-amd64
-          path: dist/tainavpn-server
-      - uses: actions/upload-artifact@v4
-        with:
-          name: go-modules
-          path: |
-            go.mod
-            go.sum
 
-  desktop-windows:
+  windows:
+    needs: version
     runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -129,17 +147,21 @@ jobs:
         env:
           CGO_ENABLED: "0"
         run: |
-          VERSION="${GITHUB_REF_NAME}"; [[ "$GITHUB_REF" == refs/tags/* ]] || VERSION="dev-${GITHUB_SHA::7}"
           go build -trimpath -tags "desktop,production,${CORE_TAGS}" \
             -ldflags "-s -w -H windowsgui -checklinkname=0 -X main.AppVersion=${VERSION} -X github.com/sagernet/sing-box/constant.Version=${SINGBOX_VERSION}" \
-            -o dist/Tainavpn.exe ./desktop
+            -o "dist/Tainavpn-${VERSION}-windows-x64.exe" ./desktop
       - uses: actions/upload-artifact@v4
         with:
-          name: tainavpn-windows-amd64
-          path: dist/Tainavpn.exe
+          name: windows
+          path: dist/*.exe
+          retention-days: 3
 
-  desktop-linux:
-    runs-on: ubuntu-24.04
+  ubuntu:
+    needs: version
+    # built on 22.04 so the package also runs on Ubuntu 22.04 (older glibc); works on 24.04 too
+    runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -154,20 +176,59 @@ jobs:
         env:
           CGO_ENABLED: "1"
         run: |
-          VERSION="${GITHUB_REF_NAME}"; [[ "$GITHUB_REF" == refs/tags/* ]] || VERSION="dev-${GITHUB_SHA::7}"
           go build -trimpath -tags "desktop,production,webkit2_41,${CORE_TAGS}" \
             -ldflags "-s -w -checklinkname=0 -X main.AppVersion=${VERSION} -X github.com/sagernet/sing-box/constant.Version=${SINGBOX_VERSION}" \
-            -o dist/tainavpn ./desktop
-          cp desktop/build/icon.png dist/tainavpn.png
-          cp desktop/linux/* dist/
-          tar -C dist -czf tainavpn-linux-amd64.tar.gz .
+            -o build/tainavpn ./desktop
+      - name: Package .deb
+        run: |
+          P=pkg
+          install -Dm755 build/tainavpn $P/usr/bin/tainavpn
+          install -Dm644 desktop/linux/tainavpn.desktop $P/usr/share/applications/tainavpn.desktop
+          install -Dm644 desktop/build/icon.png $P/usr/share/icons/hicolor/512x512/apps/tainavpn.png
+          mkdir -p $P/DEBIAN
+          cat > $P/DEBIAN/control <<EOF
+          Package: tainavpn
+          Version: ${VERSION}
+          Architecture: amd64
+          Maintainer: Tainavpn <noreply@tainavpn.local>
+          Depends: libgtk-3-0, libwebkit2gtk-4.1-0, libcap2-bin
+          Section: net
+          Priority: optional
+          Installed-Size: $(du -sk $P/usr | cut -f1)
+          Description: Tainavpn - весь трафик через прокси
+           Отправляет трафик устройства в SOCKS5/HTTP-прокси (ядро sing-box).
+          EOF
+          sed -i 's/^          //' $P/DEBIAN/control
+          cat > $P/DEBIAN/postinst <<'EOF'
+          #!/bin/sh
+          set -e
+          # TUN mode needs network admin rights; grant them to the binary instead of running as root
+          setcap cap_net_admin,cap_net_bind_service,cap_net_raw+ep /usr/bin/tainavpn || true
+          command -v update-desktop-database >/dev/null && update-desktop-database -q || true
+          exit 0
+          EOF
+          sed -i 's/^          //' $P/DEBIAN/postinst
+          chmod 755 $P/DEBIAN/postinst
+          mkdir -p dist
+          dpkg-deb --root-owner-group --build $P "dist/tainavpn_${VERSION}_amd64.deb"
+          dpkg-deb --info "dist/tainavpn_${VERSION}_amd64.deb"
+      - name: Test install
+        run: |
+          sudo apt-get install -y "./dist/tainavpn_${VERSION}_amd64.deb"
+          getcap /usr/bin/tainavpn | grep -q cap_net_admin
+          test -f /usr/share/applications/tainavpn.desktop
+          echo "installed ok"
       - uses: actions/upload-artifact@v4
         with:
-          name: tainavpn-linux-amd64
-          path: tainavpn-linux-amd64.tar.gz
+          name: ubuntu
+          path: dist/*.deb
+          retention-days: 3
 
   android:
+    needs: version
     runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -181,7 +242,6 @@ jobs:
       - name: Resolve modules
         run: |
           set -o pipefail
-          go version | tee -a "$RUNNER_TEMP/out.log"
           go mod tidy 2>&1 | tee -a "$RUNNER_TEMP/out.log"
           go get golang.org/x/mobile/bind@${XMOBILE} 2>&1 | tee -a "$RUNNER_TEMP/out.log"
       - name: Install gomobile
@@ -199,7 +259,6 @@ jobs:
             -javapkg com.tainavpn -tags "${CORE_TAGS}" -trimpath \
             -ldflags "-s -w -checklinkname=0 -X github.com/sagernet/sing-box/constant.Version=${SINGBOX_VERSION}" \
             -o android/app/libs/tainacore.aar ./mobile 2>&1 | tee -a "$RUNNER_TEMP/out.log"
-          ls -la android/app/libs
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.11.1"
@@ -216,17 +275,14 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          APP_VERSION: ${{ needs.version.outputs.version }}
+          APP_VERSION_CODE: ${{ needs.version.outputs.code }}
         run: |
           [ -n "$ANDROID_KEYSTORE_PASSWORD" ] || unset ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then export APP_VERSION="${GITHUB_REF_NAME}"; fi
-          export APP_VERSION_CODE="${GITHUB_RUN_NUMBER}"
           gradle -p android assembleRelease --no-daemon 2>&1 | tee "$RUNNER_TEMP/gradle.log"
           test ${PIPESTATUS[0]} -eq 0
           mkdir -p dist
-          for f in android/app/build/outputs/apk/release/*.apk; do
-            n=$(basename "$f" | sed -e 's/^app-/tainavpn-/' -e 's/-release//')
-            cp "$f" "dist/$n"
-          done
+          cp android/app/build/outputs/apk/release/app-release.apk "dist/Tainavpn-${VERSION}-android.apk"
           ls -la dist
       - name: Report errors
         if: failure()
@@ -235,45 +291,50 @@ jobs:
           grep -E "^e: |error:|FAILURE|What went wrong" -A3 "$RUNNER_TEMP/gradle.log" 2>/dev/null | head -40 | while IFS= read -r l; do echo "::error::$l"; done || true
       - uses: actions/upload-artifact@v4
         with:
-          name: tainavpn-android
+          name: android
           path: dist/*.apk
+          retention-days: 3
 
   release:
-    # v* tag -> normal release; push to main -> rolling "nightly" pre-release with the latest builds
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    needs: [server, desktop-windows, desktop-linux, android]
+    needs: [version, server, windows, ubuntu, android]
+    if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Collect files
+          merge-multiple: true
+      - name: Remove old test builds (nightly)
         run: |
-          mkdir -p out
-          cp artifacts/tainavpn-windows-amd64/Tainavpn.exe out/Tainavpn-windows-amd64.exe
-          cp artifacts/tainavpn-linux-amd64/tainavpn-linux-amd64.tar.gz out/
-          cp artifacts/tainavpn-android/*.apk out/
-          cp artifacts/tainavpn-server-linux-amd64/tainavpn-server out/tainavpn-server-linux-amd64
-          ls -la out
-      - name: Move nightly tag
-        if: github.ref == 'refs/heads/main'
+          gh release delete nightly -R "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+      - name: Publish release
         run: |
-          git tag -f nightly
-          git push -f origin refs/tags/nightly
-      - uses: softprops/action-gh-release@v2
-        if: github.ref == 'refs/heads/main'
-        with:
-          tag_name: nightly
-          name: "Последняя сборка (main)"
-          body: "Автоматическая сборка из ветки main, коммит ${{ github.sha }}."
-          prerelease: true
-          make_latest: false
-          files: out/*
-      - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/v')
-        with:
-          files: out/*
-          generate_release_notes: true
+          ls -la artifacts
+          cat > notes.md <<EOF
+          ## Tainavpn ${VERSION}
+
+          | Система | Файл |
+          |---|---|
+          | Windows 10/11 (64-bit) | \`Tainavpn-${VERSION}-windows-x64.exe\` — запускается без установки, попросит права администратора |
+          | Android 7.0+ | \`Tainavpn-${VERSION}-android.apk\` |
+          | Ubuntu 22.04 / 24.04 | \`tainavpn_${VERSION}_amd64.deb\` — открыть двойным кликом или \`sudo apt install ./tainavpn_${VERSION}_amd64.deb\` |
+
+          Ядро: sing-box ${SINGBOX_VERSION}.
+          EOF
+          sed -i 's/^          //' notes.md
+          gh release create "v${VERSION}" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Tainavpn ${VERSION}" --notes-file notes.md --latest \
+            artifacts/Tainavpn-${VERSION}-windows-x64.exe \
+            artifacts/Tainavpn-${VERSION}-android.apk \
+            artifacts/tainavpn_${VERSION}_amd64.deb
+      - name: Delete workflow artifacts (they are in the release now)
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" --jq '.artifacts[].id' |
+            while read -r id; do gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$id" || true; done
