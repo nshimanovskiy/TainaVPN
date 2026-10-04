@@ -79,6 +79,8 @@ jobs:
         run: |
           go vet ./core/... ./server/... ./bot/... ./ui/... ./mobile/... ./tools/...
           go test -tags "${CORE_TAGS}" -ldflags "-checklinkname=0" -run TestPing ./core/
+          # the desktop apps serve only embedded files: everything index.html loads must be embedded
+          go test ./ui/
       - name: Build server
         env:
           CGO_ENABLED: "0"

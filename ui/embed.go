@@ -3,5 +3,7 @@ package ui
 
 import "embed"
 
-//go:embed index.html app.js style.css flags
+// Everything the page loads must be embedded here (the desktop apps serve only these files).
+//
+//go:embed *.html *.js *.css flags
 var FS embed.FS
