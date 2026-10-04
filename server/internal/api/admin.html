@@ -100,6 +100,7 @@ async function load() {
     (st.proxies_total === 0 ? ' <span style="color:var(--bad)">— добавьте прокси в папку на сервере</span>' : '') +
     ` · саморегистрация из приложения: ${st.open_registration ? 'включена' : 'выключена'}`;
   $('dirHint').innerHTML = `Файлы <code>*.txt</code> в папке <code>proxies</code> рядом с docker-compose.yml, по одному прокси в строке: <code>user:pass@host:port</code>. Изменения подхватываются за 10 секунд.`;
+  px.proxies = px.proxies || []; px.errors = px.errors || [];
   $('proxies').innerHTML = px.proxies.map(p => `
     <tr>
       <td>${esc(p.host)}:${p.port}<div class="muted" style="font-size:12px">${esc(p.username || 'без логина')}</div></td>
@@ -110,7 +111,7 @@ async function load() {
     </tr>`).join('') || '<tr><td colspan="5" class="muted">Папка пуста</td></tr>';
   $('perr').hidden = !px.errors.length;
   $('perr').textContent = px.errors.length ? 'Строки с ошибками:\n' + px.errors.join('\n') : '';
-  $('users').innerHTML = users.map(u => `
+  $('users').innerHTML = (users || []).map(u => `
     <tr>
       <td>${esc(u.name)}<div class="muted" style="font-size:12px">${esc(u.username)} · ${u.source === 'app' ? 'из приложения' : 'вручную'}</div></td>
       <td>${u.disabled ? '<span class="pill off">выключен</span>' : '<span class="pill on">активен</span>'}</td>

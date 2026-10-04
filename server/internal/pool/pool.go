@@ -220,7 +220,7 @@ func (p *Pool) List() []Proxy {
 func (p *Pool) Errors() []string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return append([]string(nil), p.errors...)
+	return append([]string{}, p.errors...)
 }
 
 func (p *Pool) Get(id string) (Proxy, bool) {
