@@ -334,7 +334,9 @@ function buildConfig(p) {
   };
   let inbounds;
   if (platform === 'android') {
-    inbounds = [tun];
+    // gvisor: with the "system"/"mixed" TCP stack Android's own DNS-over-TLS client (Private DNS)
+    // can't connect through the tunnel and all name resolution breaks (reproduced on an emulator)
+    inbounds = [{ ...tun, stack: 'gvisor' }];
   } else if (store.mode === 'proxy') {
     inbounds = [{ type: 'mixed', tag: 'mixed-in', listen: '127.0.0.1', listen_port: 2080, set_system_proxy: true }];
   } else {

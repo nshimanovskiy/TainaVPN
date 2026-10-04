@@ -64,6 +64,9 @@ done
 
 adb shell dumpsys notification --noredact > $OUT/notifications.txt 2>&1
 if grep -qiE "private.?dns" $OUT/notifications.txt; then
-  echo "::warning::Private DNS notification is present after the run ($PDNS_MODE)"
+  echo "::error::Android shows the 'Private DNS server cannot be accessed' notification ($PDNS_MODE)"
+  overall=1
+else
+  echo "::notice::no Private DNS notification ($PDNS_MODE)"
 fi
 exit $overall
