@@ -51,6 +51,12 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/info", a.info)
 	mux.HandleFunc("POST /api/v1/register", a.register)
 	mux.HandleFunc("GET /sub/{key}", a.subscription)
+	mux.HandleFunc("GET /sub/{key}/links", a.subLinks)
+	mux.HandleFunc("GET /sub/{key}/singbox", a.subSingBox)
+	mux.HandleFunc("GET /ios", a.iosPage)
+	mux.HandleFunc("GET /ios/manifest.json", a.iosManifest)
+	mux.HandleFunc("GET /ios/icon-180.png", pngHandler(icon180))
+	mux.HandleFunc("GET /ios/icon-512.png", pngHandler(icon512))
 	mux.HandleFunc("GET /api/admin/users", a.admin(a.listUsers))
 	mux.HandleFunc("POST /api/admin/users", a.admin(a.createUser))
 	mux.HandleFunc("DELETE /api/admin/users/{id}", a.admin(a.deleteUser))
@@ -217,18 +223,8 @@ func (a *API) assign(u store.User, force bool) (pool.Proxy, error) {
 }
 
 func (a *API) subscription(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.store.ByKey(r.PathValue("key"), clientIP(r))
+	_, px, ok := a.resolve(w, r)
 	if !ok {
-		errJSON(w, 404, "unknown key")
-		return
-	}
-	if u.Disabled {
-		errJSON(w, 403, "key is disabled")
-		return
-	}
-	px, err := a.assign(u, false)
-	if err != nil {
-		errJSON(w, 503, err.Error())
 		return
 	}
 	writeJSON(w, 200, map[string]any{
@@ -260,12 +256,13 @@ func (a *API) admin(next http.HandlerFunc) http.HandlerFunc {
 type userView struct {
 	store.User
 	SubscriptionURL string `json:"subscription_url"`
+	IOSURL          string `json:"ios_url"`
 	Proxy           string `json:"proxy,omitempty"`
 	ProxyAlive      bool   `json:"proxy_alive"`
 }
 
 func (a *API) view(r *http.Request, u store.User) userView {
-	v := userView{User: u, SubscriptionURL: a.baseURL(r) + "/sub/" + u.Key}
+	v := userView{User: u, SubscriptionURL: a.baseURL(r) + "/sub/" + u.Key, IOSURL: a.baseURL(r) + "/ios#" + u.Key}
 	if px, ok := a.pool.Get(u.ProxyID); ok {
 		v.Proxy = px.Addr()
 		v.ProxyAlive = px.Usable()

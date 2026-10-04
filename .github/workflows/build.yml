@@ -90,6 +90,14 @@ jobs:
             echo "$CFG" | python3 -c 'import json,sys;p=json.load(sys.stdin)["proxies"][0];assert (p["server"],p["port"],p["username"])==("127.0.0.1",21080,"up"),p'
           done
           echo "$CFG" > /tmp/sub.json
+          KEY=${SUB##*/sub/}
+          echo "$KEY" > /tmp/key
+          # iPhone formats: base64 share-link list and a full sing-box profile
+          LINKS=$(curl -fsS "http://127.0.0.1:18090/sub/$KEY/links" | base64 -d)
+          echo "links: $LINKS"
+          [[ "$LINKS" == "socks://up:pp@127.0.0.1:21080#Tainavpn"* ]] || { echo "::error::unexpected share link: $LINKS"; exit 1; }
+          curl -fsS "http://127.0.0.1:18090/sub/$KEY/singbox" > /tmp/ios-profile.json
+          curl -fsS -o /dev/null http://127.0.0.1:18090/ios
           curl -fsS -H "Authorization: Bearer 0123456789abcdef0123" http://127.0.0.1:18090/api/admin/proxies
           cat /tmp/server.log
       - name: End-to-end test of the client config (TUN -> proxy from folder)
@@ -124,6 +132,28 @@ jobs:
           sudo pkill -INT -f "runconfig /tmp/client.json"; sleep 2
           grep -q "outbound/socks\[proxy\]" /tmp/client.log || { echo "::error::traffic did not go through the proxy"; exit 1; }
           grep -q "inbound connection" /tmp/upstream.log || { echo "::error::upstream proxy saw no connections"; exit 1; }
+      - name: End-to-end test of the iPhone profile (/sub/<key>/singbox)
+        timeout-minutes: 3
+        run: |
+          python3 - <<'EOF'
+          import json
+          cfg = json.load(open("/tmp/ios-profile.json"))
+          cfg["inbounds"][0]["exclude_uid"] = [65534]   # upstream proxy runs on this machine as "nobody"
+          cfg["log"] = {"level": "info"}
+          json.dump(cfg, open("/tmp/ios-client.json", "w"), indent=2)
+          EOF
+          finish() {
+            code=$?
+            sudo pkill -INT -f "runconfig /tmp/ios-client.json" || true
+            sleep 2
+            [ $code -eq 0 ] || echo "::error::ios profile log:%0A$(head -c 6000 /tmp/ios.log | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')"
+            tail -n 20 /tmp/ios.log
+          }
+          trap finish EXIT
+          sudo timeout 90 /tmp/runconfig /tmp/ios-client.json > /tmp/ios.log 2>&1 &
+          sleep 5
+          curl -fsS --max-time 20 https://www.google.com -o /dev/null -w "ios profile through tun: %{http_code}\n"
+          grep -q "outbound/socks\[proxy\]" /tmp/ios.log || { echo "::error::iOS profile did not use the proxy"; exit 1; }
 
   windows:
     needs: version

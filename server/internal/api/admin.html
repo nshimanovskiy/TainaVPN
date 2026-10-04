@@ -52,7 +52,7 @@
         <input id="newName" placeholder="Имя (например, Телефон Маши)" style="flex:1">
         <button id="create">Создать ключ</button>
       </div>
-      <p class="muted" style="margin:10px 0 0">Ссылку-подписку вставьте в приложении: «Добавить → Ссылка с сервера».</p>
+      <p class="muted" style="margin:10px 0 0">«Ссылка» — вставить в приложении Tainavpn (Windows, Android, Ubuntu): «Добавить → С сервера». «iPhone» — открыть на айфоне в Safari.</p>
     </div>
     <div class="card scroll">
       <table>
@@ -117,7 +117,7 @@ async function load() {
       <td>${u.disabled ? '<span class="pill off">выключен</span>' : '<span class="pill on">активен</span>'}</td>
       <td>${u.proxy ? esc(u.proxy) + (u.proxy_alive ? '' : ' <span class="pill off">не работает</span>') : '<span class="muted">выдаётся при подключении</span>'}</td>
       <td>${fmt(u.last_seen)}<div class="muted" style="font-size:12px">${esc(u.last_ip || '')}</div></td>
-      <td><button class="ghost" data-copy="${esc(u.subscription_url)}">Копировать</button></td>
+      <td><div class="row"><button class="ghost" data-copy="${esc(u.subscription_url)}" title="Для приложений Windows / Android / Ubuntu">Ссылка</button><button class="ghost" data-copy="${esc(u.ios_url)}" title="Страница для iPhone: открыть в Safari">iPhone</button></div></td>
       <td><div class="row">
         <button class="ghost" data-act="${u.disabled ? 'enable' : 'disable'}" data-id="${u.id}">${u.disabled ? 'Включить' : 'Выключить'}</button>
         <button class="ghost" data-act="reassign" data-id="${u.id}" title="Выдать другой прокси из папки (применится при следующем подключении)">Другой прокси</button>
@@ -128,7 +128,7 @@ async function load() {
 
 $('users').addEventListener('click', async (e) => {
   const b = e.target.closest('button'); if (!b) return;
-  if (b.dataset.copy) { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = 'Скопировано'; setTimeout(() => b.textContent = 'Копировать', 1200); return; }
+  if (b.dataset.copy) { await navigator.clipboard.writeText(b.dataset.copy); const old = b.textContent; b.textContent = 'Скопировано'; setTimeout(() => b.textContent = old, 1200); return; }
   const id = b.dataset.id, act = b.dataset.act;
   try {
     if (act === 'delete') { if (!confirm('Удалить пользователя?')) return; await api('DELETE', '/api/admin/users/' + id); }
