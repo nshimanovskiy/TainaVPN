@@ -358,7 +358,7 @@ jobs:
           APP_VERSION_CODE: ${{ needs.version.outputs.code }}
         run: |
           [ -n "$ANDROID_KEYSTORE_PASSWORD" ] || unset ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD
-          gradle -p android assembleRelease --no-daemon 2>&1 | tee "$RUNNER_TEMP/gradle.log"
+          gradle -p android assembleRelease assembleDebug --no-daemon 2>&1 | tee "$RUNNER_TEMP/gradle.log"
           test ${PIPESTATUS[0]} -eq 0
           mkdir -p dist
           cp android/app/build/outputs/apk/release/app-release.apk "dist/Tainavpn-${VERSION}-android.apk"
@@ -373,9 +373,50 @@ jobs:
           name: android
           path: dist/*.apk
           retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 3
+
+  android-test:
+    # real Android emulator: VPN + "Private DNS" strict mode
+    needs: android
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-debug
+          path: .
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Test SOCKS5 proxy on the host (10.0.2.2:21080 from the emulator)
+        run: |
+          nohup python3 tools/android_test/socks5_server.py 21080 up pp > /tmp/socks.log 2>&1 &
+          sleep 1
+          curl -fsS --max-time 15 -x socks5h://up:pp@127.0.0.1:21080 https://www.google.com -o /dev/null -w "proxy ok %{http_code}\n"
+      - name: Emulator test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: bash tools/android_test/run.sh
+      - name: Proxy log
+        if: always()
+        run: |
+          echo "--- connections through the test proxy ---"
+          sort /tmp/socks.log | uniq -c | sort -rn | head -40
 
   release:
-    needs: [version, server, windows, ubuntu, android]
+    needs: [version, server, windows, ubuntu, android, android-test]
     if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-24.04
     permissions:

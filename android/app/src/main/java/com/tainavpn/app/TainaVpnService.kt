@@ -91,6 +91,15 @@ class TainaVpnService : VpnService() {
                 val config = configFile(this).readText()
                 Tainacore.start(config, File(filesDir, "core").absolutePath, host)
                 VpnState.state = "running"
+                // debug builds: keep core logs in a file for CI
+                if ((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+                    Thread {
+                        while (VpnState.state == "running") {
+                            try { File(filesDir, "core.log").writeText(Tainacore.logs()) } catch (_: Exception) {}
+                            Thread.sleep(1000)
+                        }
+                    }.start()
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "start failed", e)
                 VpnState.error = e.message ?: e.toString()

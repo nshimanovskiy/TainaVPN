@@ -41,6 +41,22 @@ class MainActivity : Activity() {
         ) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
+        handleTestIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleTestIntent(intent)
+    }
+
+    /** Debug builds only: CI starts/stops the VPN with files/config.json (am start --ez test_connect true). */
+    private fun handleTestIntent(intent: Intent?) {
+        val debuggable = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        if (!debuggable || intent == null) return
+        if (intent.getBooleanExtra("test_connect", false) && VpnService.prepare(this) == null) {
+            TainaVpnService.start(this)
+        }
+        if (intent.getBooleanExtra("test_disconnect", false)) TainaVpnService.stop(this)
     }
 
     @Deprecated("Deprecated in Java")
