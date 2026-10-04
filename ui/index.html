@@ -23,9 +23,17 @@
     <div class="status-line"><img id="statusFlag" class="flag small" alt="" hidden><span id="statusSub" class="status-sub">&nbsp;</span></div>
   </section>
 
+  <div id="updateBar" class="update-bar" hidden>
+    <span id="updateText"></span>
+    <button id="updateBtn" class="btn small" data-i18n="update">Обновить</button>
+  </div>
+
   <section class="list-head">
     <h2 data-i18n="proxies">Прокси</h2>
-    <button id="openAdd" class="btn small" data-i18n="add">+ Добавить</button>
+    <div class="head-actions">
+      <button id="pingAll" class="btn small ghost" data-i18n="ping" data-i18n-title="pingTitle">⚡ Пинг</button>
+      <button id="openAdd" class="btn small" data-i18n="add">+ Добавить</button>
+    </div>
   </section>
   <ul id="profiles" class="profiles"></ul>
   <div id="empty" class="empty" hidden>
@@ -96,6 +104,7 @@
     </div>
     <label class="check"><input type="checkbox" id="bypassLan"> <span data-i18n="bypassLan">Локальная сеть напрямую</span></label>
     <details class="logs"><summary data-i18n="coreLogs">Логи ядра</summary><pre id="logs"></pre></details>
+    <button id="checkUpdate" class="btn ghost wide" data-i18n="checkUpdates">Проверить обновления</button>
     <p class="hint" id="version"></p>
   </div>
 </div>

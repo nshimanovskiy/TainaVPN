@@ -1,0 +1,15 @@
+// Tainavpn: the VPN sets DNS for its own tun interface through systemd-resolved
+// (resolvectl dns/domain/default-route/revert). Allow that for local active
+// administrators without asking the password on every connect.
+polkit.addRule(function (action, subject) {
+    var allowed = [
+        "org.freedesktop.resolve1.set-dns-servers",
+        "org.freedesktop.resolve1.set-domains",
+        "org.freedesktop.resolve1.set-default-route",
+        "org.freedesktop.resolve1.revert"
+    ];
+    if (allowed.indexOf(action.id) >= 0 && subject.local && subject.active &&
+        (subject.isInGroup("sudo") || subject.isInGroup("admin") || subject.isInGroup("wheel"))) {
+        return polkit.Result.YES;
+    }
+});

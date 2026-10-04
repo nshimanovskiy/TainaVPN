@@ -211,6 +211,12 @@ func humanError(lang, msg string) string {
 }
 
 func main() {
+	for _, arg := range os.Args[1:] {
+		if arg == "--after-update" {
+			time.Sleep(2 * time.Second)
+		}
+	}
+	cleanupOldBinary()
 	app := NewApp()
 	assets, err := fs.Sub(ui.FS, ".")
 	if err != nil {

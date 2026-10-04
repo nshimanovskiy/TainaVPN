@@ -76,7 +76,9 @@ jobs:
       - name: Resolve modules
         run: go mod tidy
       - name: Vet
-        run: go vet ./core/... ./server/... ./bot/... ./ui/... ./mobile/... ./tools/...
+        run: |
+          go vet ./core/... ./server/... ./bot/... ./ui/... ./mobile/... ./tools/...
+          go test -tags "${CORE_TAGS}" -ldflags "-checklinkname=0" -run TestPing ./core/
       - name: Build server
         env:
           CGO_ENABLED: "0"
@@ -254,6 +256,9 @@ jobs:
           install -Dm755 build/tainavpn $P/usr/bin/tainavpn
           install -Dm644 desktop/linux/tainavpn.desktop $P/usr/share/applications/tainavpn.desktop
           install -Dm644 desktop/build/icon.png $P/usr/share/icons/hicolor/512x512/apps/tainavpn.png
+          # polkit: no password prompt for the VPN's DNS settings (24.04: rules.d, 22.04: pkla)
+          install -Dm644 desktop/linux/50-tainavpn.rules $P/usr/share/polkit-1/rules.d/50-tainavpn.rules
+          install -Dm644 desktop/linux/tainavpn.pkla $P/var/lib/polkit-1/localauthority/10-vendor.d/tainavpn.pkla
           mkdir -p $P/DEBIAN
           cat > $P/DEBIAN/control <<EOF
           Package: tainavpn
@@ -261,6 +266,7 @@ jobs:
           Architecture: amd64
           Maintainer: Tainavpn <noreply@tainavpn.local>
           Depends: libgtk-3-0, libwebkit2gtk-4.1-0, libcap2-bin
+          Recommends: pkexec | policykit-1
           Section: net
           Priority: optional
           Installed-Size: $(du -sk $P/usr | cut -f1)
@@ -285,6 +291,8 @@ jobs:
         run: |
           sudo apt-get install -y "./dist/tainavpn_${VERSION}_amd64.deb"
           getcap /usr/bin/tainavpn | grep -q cap_net_admin
+          test -f /usr/share/polkit-1/rules.d/50-tainavpn.rules
+          test -f /var/lib/polkit-1/localauthority/10-vendor.d/tainavpn.pkla
           test -f /usr/share/applications/tainavpn.desktop
           echo "installed ok"
       - uses: actions/upload-artifact@v4

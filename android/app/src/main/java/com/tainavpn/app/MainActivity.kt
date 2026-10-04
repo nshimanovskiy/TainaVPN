@@ -109,6 +109,36 @@ class MainActivity : Activity() {
         }
 
         @JavascriptInterface
+        fun appVersion(): String = packageManager.getPackageInfo(packageName, 0).versionName ?: ""
+
+        /** Measures ping in the background; the result comes back via window.__tvpnPingDone. */
+        @JavascriptInterface
+        fun pingAsync(reqId: String, proxy: String) {
+            Thread {
+                var ms = 0
+                var err = ""
+                try {
+                    val p = JSONObject(proxy)
+                    ms = Tainacore.ping(
+                        p.optString("type", "socks"), p.getString("server"), p.getInt("port"),
+                        p.optString("username"), p.optString("password"), 6000
+                    )
+                } catch (e: Throwable) {
+                    err = e.message ?: e.toString()
+                }
+                val js = "window.__tvpnPingDone && window.__tvpnPingDone(" +
+                    JSONObject.quote(reqId) + "," + ms + "," + JSONObject.quote(err) + ")"
+                runOnUiThread { web.evaluateJavascript(js, null) }
+            }.start()
+        }
+
+        @JavascriptInterface
+        fun update(url: String, sha256: String) = Updater.start(this@MainActivity, url, sha256)
+
+        @JavascriptInterface
+        fun updateStatus(): String = Updater.status()
+
+        @JavascriptInterface
         fun setLang(lang: String) {
             Lang.set(this@MainActivity, lang)
         }

@@ -6,6 +6,7 @@ package tainacore
 
 import (
 	"sync"
+	"time"
 
 	"github.com/nshimanovskiy/tainavpn/core"
 )
@@ -67,3 +68,9 @@ func Logs() string { return logs.String() }
 
 // CoreVersion returns the sing-box version.
 func CoreVersion() string { return core.Version() }
+
+// Ping measures the real delay of a proxy in milliseconds.
+func Ping(proxyType, host string, port int32, username, password string, timeoutMs int32) (int32, error) {
+	ms, err := core.Ping(proxyType, host, int(port), username, password, time.Duration(timeoutMs)*time.Millisecond)
+	return int32(ms), err
+}

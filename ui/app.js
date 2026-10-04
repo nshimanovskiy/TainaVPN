@@ -20,6 +20,14 @@ function androidBridge(A) {
     http: async (method, url, body) => JSON.parse(A.http(method, url, body || '')),
     setLang: async (l) => { if (A.setLang) A.setLang(l); },
     openUrl: async (u) => { A.openUrl(u); },
+    appVersion: async () => (A.appVersion ? A.appVersion() : ''),
+    ping: (p) => new Promise((resolve, reject) => {
+      const id = 'p' + Math.random().toString(36).slice(2);
+      pingWaiters[id] = { resolve, reject };
+      A.pingAsync(id, JSON.stringify(p));
+    }),
+    update: async (url, sha) => { A.update(url, sha || ''); },
+    updateStatus: async () => JSON.parse(A.updateStatus()),
   };
 }
 
@@ -39,6 +47,10 @@ function desktopBridge() {
     http: async (method, url, body) => JSON.parse(await app().HTTP(method, url, body || '')),
     setLang: (l) => app().SetLang(l),
     openUrl: (u) => app().OpenURL(u),
+    appVersion: () => app().AppVersion(),
+    ping: (p) => app().Ping(JSON.stringify(p)),
+    update: (url, sha) => app().Update(url, sha || ''),
+    updateStatus: async () => JSON.parse(await app().UpdateStatus()),
   };
 }
 
@@ -55,11 +67,25 @@ function mockBridge() {
     logs: async () => '(browser preview)',
     deviceName: async () => 'browser',
     openUrl: async (u) => { window.open(u, '_blank'); },
+    appVersion: async () => '0.0.0',
+    ping: async () => { await new Promise((r) => setTimeout(r, 300 + Math.random() * 700)); return Math.round(80 + Math.random() * 900); },
+    update: async () => {},
+    updateStatus: async () => ({ state: 'idle' }),
     version: async () => 'preview',
     http: async (method, url, body) => {
       const r = await fetch(url, { method, body: body || undefined, headers: { 'Content-Type': 'application/json' } });
       return { status: r.status, body: await r.text() };
     },
+  };
+}
+
+// Android answers ping requests asynchronously through this callback
+const pingWaiters = {};
+if (typeof window !== 'undefined') {
+  window.__tvpnPingDone = (id, ms, err) => {
+    const w = pingWaiters[id];
+    delete pingWaiters[id];
+    if (w) { if (err) w.reject(new Error(err)); else w.resolve(ms); }
   };
 }
 
@@ -282,6 +308,18 @@ function buildConfig(p) {
     { action: 'sniff' },
     { protocol: 'dns', action: 'hijack-dns' },
   ];
+  if (platform === 'android') {
+    // Android "Private DNS" (DNS-over-TLS, port 853): purchased proxies usually block 853,
+    // so send it directly (it is encrypted anyway); probes to the VPN's own DNS address fail fast.
+    rules.push({ ip_cidr: ['172.19.0.2/32'], port: 853, action: 'reject' });
+    rules.push({ network: 'tcp', port: 853, outbound: 'direct' });
+  }
+  // traffic to the proxy servers themselves (e.g. the ping check) goes direct, not proxy-in-proxy
+  const servers = [...new Set(store.profiles.map((x) => String(x.server || '')).filter(Boolean))];
+  const ipServers = servers.filter((h) => /^[\d.]+$|:/.test(h)).map((h) => (h.includes(':') ? h + '/128' : h + '/32'));
+  const nameServers = servers.filter((h) => !/^[\d.]+$|:/.test(h));
+  if (ipServers.length) rules.push({ ip_cidr: ipServers, outbound: 'direct' });
+  if (nameServers.length) rules.push({ domain: nameServers, outbound: 'direct' });
   if (store.bypassLan) rules.push({ ip_is_private: true, outbound: 'direct' });
   // QUIC through SOCKS5 is unreliable: block it so browsers fall back to TCP
   rules.push({ network: 'udp', port: 443, action: 'reject' });
@@ -312,6 +350,7 @@ function buildConfig(p) {
       ],
       final: 'remote',
       strategy: 'prefer_ipv4',
+      reverse_mapping: true,
     },
     inbounds,
     outbounds: [proxy, { type: 'direct', tag: 'direct' }],
@@ -363,6 +402,112 @@ async function pollStatus() {
   renderStatus();
 }
 
+// ---------- ping ----------
+
+const pingRes = {}; // profile id -> { ms } | { err } | { pending: true }
+
+function pingBadge(p) {
+  const r = pingRes[p.id];
+  if (!r) return '';
+  if (r.pending) return '<span class="ping wait">…</span>';
+  if (r.err) return `<span class="ping bad" title="${esc(r.err)}">✕</span>`;
+  const cls = r.ms < 300 ? 'good' : r.ms < 800 ? 'mid' : 'bad';
+  return `<span class="ping ${cls}">${r.ms} ${esc(t('ms'))}</span>`;
+}
+
+let pinging = false;
+async function pingAll() {
+  if (pinging || !store.profiles.length) return;
+  pinging = true;
+  $('pingAll').disabled = true;
+  const list = [...store.profiles];
+  list.forEach((p) => { pingRes[p.id] = { pending: true }; });
+  render();
+  let i = 0;
+  const worker = async () => {
+    while (i < list.length) {
+      const p = list[i++];
+      try {
+        const ms = await Native.ping({ type: p.type, server: p.server, port: +p.port, username: p.username || '', password: p.password || '' });
+        pingRes[p.id] = { ms };
+      } catch (e) {
+        pingRes[p.id] = { err: String(e.message || e) };
+      }
+      render();
+    }
+  };
+  await Promise.all([worker(), worker(), worker(), worker()]);
+  pinging = false;
+  $('pingAll').disabled = false;
+}
+
+// ---------- updates ----------
+
+const RELEASES_API = 'https://api.github.com/repos/nshimanovskiy/TainaVPN/releases/latest';
+let updateInfo = null; // { version, url, sha }
+
+function newerThan(a, b) {
+  const pa = String(a).replace(/^v/, '').split('.').map(Number);
+  const pb = String(b).replace(/^v/, '').split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0);
+  }
+  return false;
+}
+
+function assetFor(assets) {
+  const re = platform === 'windows' ? /windows.*\.exe$/i : platform === 'android' ? /android\.apk$/i : platform === 'linux' ? /_amd64\.deb$/i : null;
+  return re ? (assets || []).find((a) => re.test(a.name)) : null;
+}
+
+async function checkUpdate(manual) {
+  if (!['windows', 'android', 'linux'].includes(platform)) return;
+  try {
+    const current = await Native.appVersion();
+    const rel = await httpJSON('GET', RELEASES_API);
+    const asset = assetFor(rel.assets);
+    if (asset && /^\d+\.\d+\.\d+$/.test(current) && newerThan(rel.tag_name, current)) {
+      updateInfo = { version: String(rel.tag_name).replace(/^v/, ''), url: asset.browser_download_url, sha: asset.digest || '' };
+      $('updateText').textContent = t('updateAvailable', updateInfo.version);
+      $('updateBar').hidden = false;
+    } else {
+      updateInfo = null;
+      $('updateBar').hidden = true;
+      if (manual) toast(t('upToDate'));
+    }
+  } catch (e) {
+    if (manual) toast(t('updateCheckFailed', e.message || e));
+  }
+}
+
+async function runUpdate() {
+  if (!updateInfo) return;
+  const btn = $('updateBtn');
+  btn.disabled = true;
+  try {
+    await Native.update(updateInfo.url, updateInfo.sha);
+  } catch (e) {
+    toast(String(e.message || e)); btn.disabled = false; return;
+  }
+  const timer = setInterval(async () => {
+    let st;
+    try { st = await Native.updateStatus(); } catch { return; }
+    if (st.state === 'downloading') {
+      $('updateText').textContent = t('updateDownloading', Math.round((st.progress || 0) * 100));
+    } else if (st.state === 'installing') {
+      $('updateText').textContent = t('updateInstalling');
+    } else if (st.state === 'error') {
+      clearInterval(timer);
+      $('updateText').textContent = t('updateFailed', st.error);
+      btn.disabled = false;
+    } else if (st.state === 'idle') {
+      clearInterval(timer);
+      $('updateText').textContent = t('updateAvailable', updateInfo.version);
+      btn.disabled = false;
+    }
+  }, 500);
+}
+
 // ---------- rendering ----------
 
 function renderStatus() {
@@ -395,6 +540,7 @@ function render() {
         <div class="p-sub">${p.sub ? 'Tainavpn' : t('ownProxy') + (p.label && countryName(p) ? ' · ' + esc(p.label) : '') + ' · ' + esc(p.server) + ':' + esc(p.port)}</div>
       </div>
       <div class="p-act">
+        ${pingBadge(p)}
         ${p.sub ? `<button data-act="refresh" title="${esc(t('refreshList'))}">↻</button>` : ''}
         <button data-act="delete" title="${esc(t('delete'))}">✕</button>
       </div>
@@ -459,6 +605,9 @@ function bind() {
 
   const openBot = () => { if (botUrl) Native.openUrl(botUrl).catch((e) => toast(String(e.message || e))); };
   $('openBot').onclick = openBot;
+  $('pingAll').onclick = pingAll;
+  $('updateBtn').onclick = runUpdate;
+  $('checkUpdate').onclick = () => checkUpdate(true);
   $('openBot2').onclick = openBot;
   $('emptyAdd').onclick = () => openSheet('addSheet');
 
@@ -564,6 +713,7 @@ async function init() {
   bind();
   render();
   fetchInfo();
+  setTimeout(() => checkUpdate(false), 3000);
   await pollStatus();
   setInterval(pollStatus, 1000);
 }

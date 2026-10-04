@@ -1,0 +1,8 @@
+# Tainavpn (polkit 0.105, Ubuntu 22.04): let administrators set DNS of the VPN interface
+# via systemd-resolved without a password prompt on every connect.
+[Tainavpn: VPN interface DNS]
+Identity=unix-group:sudo;unix-group:admin
+Action=org.freedesktop.resolve1.set-dns-servers;org.freedesktop.resolve1.set-domains;org.freedesktop.resolve1.set-default-route;org.freedesktop.resolve1.revert
+ResultAny=no
+ResultInactive=no
+ResultActive=yes

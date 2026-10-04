@@ -58,6 +58,14 @@ button { font: inherit; cursor: pointer; }
 .p-act button { background: transparent; border: 0; color: var(--muted); padding: 6px 8px; border-radius: 8px; font-size: 14px; }
 .p-act button:hover { background: var(--card2); color: var(--text); }
 
+.head-actions { display: flex; gap: 8px; }
+.ping { font-size: 12.5px; font-variant-numeric: tabular-nums; padding: 2px 8px; border-radius: 99px; align-self: center; white-space: nowrap; }
+.ping.good { color: var(--ok); background: rgba(52,201,138,.1); }
+.ping.mid { color: var(--warn); background: rgba(245,179,62,.1); }
+.ping.bad { color: var(--bad); background: rgba(255,93,108,.1); }
+.ping.wait { color: var(--muted); }
+.update-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: rgba(79,140,255,.1); border: 1px solid rgba(79,140,255,.35); border-radius: 12px; padding: 10px 12px; margin-bottom: 14px; font-size: 14px; }
+.update-bar span { overflow-wrap: anywhere; }
 .empty { text-align: center; color: var(--muted); padding: 18px 0; }
 .empty .hint { margin: 0 auto 14px; max-width: 340px; }
 .empty-actions { display: flex; flex-direction: column; gap: 8px; max-width: 320px; margin: 0 auto; }
