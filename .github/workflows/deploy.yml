@@ -1,6 +1,8 @@
 name: Deploy server
 
-# Кнопка «Run workflow» во вкладке Actions: собирает tainavpn-server и обновляет его на VPS.
+# Обновляет tainavpn-server на VPS.
+# Запускается автоматически из Build после успешных тестов, если менялся серверный код,
+# или вручную кнопкой «Run workflow» во вкладке Actions.
 on:
   workflow_dispatch:
     inputs:
@@ -8,6 +10,15 @@ on:
         description: "Домен API (используется только при первом деплое, когда .env ещё нет)"
         default: "vpn.sdsds.top"
         required: true
+  workflow_call:
+    inputs:
+      public_host:
+        type: string
+        default: "vpn.sdsds.top"
+
+concurrency:
+  group: deploy-server
+  cancel-in-progress: false
 
 env:
   GO_VERSION: "1.25.x"

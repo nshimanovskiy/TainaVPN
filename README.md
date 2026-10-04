@@ -79,7 +79,9 @@ host:port:user:pass            # SOCKS5, другая запись
    включите (`ln -s … /etc/nginx/sites-enabled/`), `sudo nginx -t && sudo systemctl reload nginx`, затем `sudo certbot --nginx -d vpn.sdsds.top`.
 5. Положите прокси в `~/tainavpn/proxies/*.txt`.
 
-Дальше обновление сервера — той же кнопкой **Run workflow**. Папка `proxies/`, `.env` и `data/` при обновлении не трогаются.
+Дальше сервер **обновляется сам**: при каждом push в `main`, который меняет серверный код (`server/`, `deploy/`, `go.mod`),
+Build сначала прогоняет тесты сервера и только после их успеха запускает деплой. Ручная кнопка **Run workflow** тоже осталась.
+Папка `proxies/`, `.env` и `data/` при обновлении не трогаются.
 
 ### Переменные `.env`
 
