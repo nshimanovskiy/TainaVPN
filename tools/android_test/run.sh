@@ -62,10 +62,15 @@ fi
 adb shell dumpsys connectivity | grep -iE "ValidatedPrivateDns|PrivateDnsServerName|PRIVATE_DNS_BROKEN|privateDnsBroken" | head -20 | tee $OUT/pdns.txt
 if grep -qi "PRIVATE_DNS_BROKEN" $OUT/pdns.txt; then echo "::error::PRIVATE_DNS_BROKEN flag on a network"; fail=1; fi
 
-echo "----- core log (tail) -----"
-adb shell run-as $PKG cat files/core.log | tail -80 | tee $OUT/core.log
-echo "----- 853 in core log -----"
-grep -E ":853" $OUT/core.log | head -20 || true
+echo "----- core log -----"
+adb shell run-as $PKG cat files/core.log > $OUT/core.log
+tail -80 $OUT/core.log
+# key lines as annotations (the job log itself is hard to read from outside)
+ann() { local title="$1"; shift; local body; body=$("$@" 2>/dev/null | head -c 3500 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g'); echo "::warning::$title%0A$body"; }
+ann "core: errors/853/dns ($PDNS_MODE)" grep -iE "error|warn|:853|dns:|hijack|reject" $OUT/core.log
+ann "core: last lines ($PDNS_MODE)" tail -25 $OUT/core.log
+ann "connectivity: VPN/private DNS ($PDNS_MODE)" grep -iE "VPN|PrivateDns|DnsAddresses|Dns.*Validated" $OUT/connectivity.txt
+ann "notification ($PDNS_MODE)" grep -iE -A4 "private.?dns" $OUT/notifications.txt
 
 adb shell am start -n $PKG/.MainActivity --ez test_disconnect true
 exit $fail

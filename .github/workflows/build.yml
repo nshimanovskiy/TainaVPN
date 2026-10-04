@@ -408,12 +408,14 @@ jobs:
           arch: x86_64
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: bash tools/android_test/run.sh
+          # first with Private DNS off (baseline), then in strict mode like on the user's phone
+          script: PDNS_MODE=off bash tools/android_test/run.sh; PDNS_MODE=hostname bash tools/android_test/run.sh
       - name: Proxy log
         if: always()
         run: |
           echo "--- connections through the test proxy ---"
           sort /tmp/socks.log | uniq -c | sort -rn | head -40
+          echo "::warning::proxy connections%0A$(sort /tmp/socks.log | uniq -c | sort -rn | head -30 | sed ':a;N;$!ba;s/\n/%0A/g')"
 
   release:
     needs: [version, server, windows, ubuntu, android, android-test]
