@@ -23,7 +23,7 @@ func main() {
 	}
 	logs := core.NewLogBuffer(10)
 	logs.Echo = func(line string) { fmt.Println(line) }
-	inst, err := core.Start(string(data), filepath.Join(os.TempDir(), "runconfig-core"), nil, logs)
+	inst, err := core.Start(string(data), filepath.Join(os.TempDir(), fmt.Sprintf("runconfig-core-%d", os.Getpid())), nil, logs)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "start:", err)
 		os.Exit(1)

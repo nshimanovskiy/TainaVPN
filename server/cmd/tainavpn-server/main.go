@@ -1,7 +1,7 @@
-// tainavpn-server: hands out SOCKS5 proxies to the Tainavpn apps.
+// tainavpn-server: hands out upstream proxies to the Tainavpn apps.
 //
-// It runs an embedded sing-box SOCKS5 server (one login/password per user)
-// and an HTTP API that the apps use to fetch their proxy ("subscription").
+// Proxies are taken from text files in TVPN_PROXIES_DIR; every app key gets
+// its own proxy from that list. The VPS itself never relays user traffic.
 package main
 
 import (
@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/nshimanovskiy/tainavpn/server/internal/api"
-	"github.com/nshimanovskiy/tainavpn/server/internal/proxy"
+	"github.com/nshimanovskiy/tainavpn/server/internal/pool"
 	"github.com/nshimanovskiy/tainavpn/server/internal/store"
 )
 
@@ -49,16 +49,11 @@ func main() {
 	log.SetFlags(log.LstdFlags)
 	cfg := api.Config{
 		Name:             env("TVPN_NAME", "Tainavpn"),
-		PublicHost:       env("TVPN_PUBLIC_HOST", ""),
-		SocksPort:        envInt("TVPN_SOCKS_PORT", 1080),
 		PublicURL:        env("TVPN_PUBLIC_URL", ""),
 		AdminToken:       env("TVPN_ADMIN_TOKEN", ""),
 		AdminPath:        env("TVPN_ADMIN_PATH", "/panel"),
 		OpenRegistration: envBool("TVPN_OPEN_REGISTRATION", false),
 		RegisterPerDay:   envInt("TVPN_REGISTER_PER_DAY", 3),
-	}
-	if cfg.PublicHost == "" {
-		log.Fatal("TVPN_PUBLIC_HOST is required (domain or IP of the VPS that clients connect to)")
 	}
 	if len(cfg.AdminToken) < 16 {
 		log.Fatal("TVPN_ADMIN_TOKEN must be at least 16 characters")
@@ -69,13 +64,15 @@ func main() {
 	if err != nil {
 		log.Fatalf("open store: %v", err)
 	}
-	px := proxy.New(env("TVPN_SOCKS_LISTEN", "::"), cfg.SocksPort, st, filepath.Join(dataDir, "core"))
-	st.OnChange(px.Reload)
-	_ = px.Start()
+	// upstream proxies are read from text files in this folder (one user:pass@host:port per line)
+	pl := pool.New(env("TVPN_PROXIES_DIR", filepath.Join(dataDir, "proxies")))
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	go pl.Run(ctx)
 
 	srv := &http.Server{
 		Addr:              env("TVPN_API_LISTEN", "127.0.0.1:8090"),
-		Handler:           api.New(cfg, st, px).Handler(),
+		Handler:           api.New(cfg, st, pl).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
@@ -88,8 +85,7 @@ func main() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = srv.Shutdown(ctx)
-	px.Close()
+	_ = srv.Shutdown(shutdownCtx)
 }

@@ -32,31 +32,44 @@ jobs:
           CGO_ENABLED: "0"
           GOOS: linux
           GOARCH: amd64
-        run: |
-          go build -trimpath -tags "badlinkname,tfogo_checklinkname0" \
-            -ldflags "-s -w -checklinkname=0 -X github.com/sagernet/sing-box/constant.Version=${SINGBOX_VERSION}" \
-            -o dist/tainavpn-server ./server/cmd/tainavpn-server
-      - name: Smoke test
-        run: |
-          mkdir -p /tmp/tvpn
-          TVPN_PUBLIC_HOST=127.0.0.1 TVPN_ADMIN_TOKEN=0123456789abcdef0123 TVPN_DATA_DIR=/tmp/tvpn \
-          TVPN_SOCKS_PORT=21080 TVPN_API_LISTEN=127.0.0.1:18090 TVPN_OPEN_REGISTRATION=true ./dist/tainavpn-server &
-          sleep 2
-          curl -fsS http://127.0.0.1:18090/api/v1/info
-          SUB=$(curl -fsS -X POST -d '{"device":"ci"}' http://127.0.0.1:18090/api/v1/register | python3 -c 'import json,sys;print(json.load(sys.stdin)["subscription_url"])')
-          echo "sub: $SUB"
-          CFG=$(curl -fsS "$SUB")
-          echo "$CFG"
-          sleep 2
-          U=$(echo "$CFG" | python3 -c 'import json,sys;p=json.load(sys.stdin)["proxies"][0];print(p["username"]+":"+p["password"])')
-          curl -fsS --max-time 20 -x "socks5h://$U@127.0.0.1:21080" https://www.google.com -o /dev/null -w "via socks: %{http_code}\n"
-          if curl -s --max-time 5 -x "socks5h://bad:creds@127.0.0.1:21080" https://www.google.com -o /dev/null; then echo "auth not enforced!"; exit 1; fi
-          curl -fsS -H "Authorization: Bearer 0123456789abcdef0123" http://127.0.0.1:18090/api/admin/users
-          echo "$CFG" > /tmp/sub.json
-      - name: End-to-end test of the client config (TUN -> SOCKS5 server)
-        timeout-minutes: 3
+        run: go build -trimpath -ldflags "-s -w" -o dist/tainavpn-server ./server/cmd/tainavpn-server
+      - name: Start an upstream SOCKS5 proxy (stands in for a purchased proxy)
         run: |
           go build -tags "${CORE_TAGS}" -ldflags "-checklinkname=0 -X github.com/sagernet/sing-box/constant.Version=${SINGBOX_VERSION}" -o /tmp/runconfig ./tools/runconfig
+          cat > /tmp/upstream.json <<'EOF'
+          {"inbounds":[{"type":"socks","listen":"127.0.0.1","listen_port":21080,"users":[{"username":"up","password":"pp"}]}],
+           "outbounds":[{"type":"direct"}]}
+          EOF
+          # run as "nobody" so the client TUN test below can exclude it by uid
+          (sudo -u nobody /tmp/runconfig /tmp/upstream.json > /tmp/upstream.log 2>&1 &)
+          sleep 2
+          curl -fsS --max-time 20 -x socks5h://up:pp@127.0.0.1:21080 https://www.google.com -o /dev/null -w "upstream ok: %{http_code}\n"
+      - name: Smoke test (proxies from folder)
+        run: |
+          mkdir -p /tmp/tvpn/proxies
+          cat > /tmp/tvpn/proxies/list.txt <<'EOF'
+          # comment
+          up:pp@127.0.0.1:21080
+          wrong:creds@127.0.0.1:21080
+          garbage
+          EOF
+          TVPN_ADMIN_TOKEN=0123456789abcdef0123 TVPN_DATA_DIR=/tmp/tvpn TVPN_PROXIES_DIR=/tmp/tvpn/proxies \
+          TVPN_API_LISTEN=127.0.0.1:18090 TVPN_OPEN_REGISTRATION=true ./dist/tainavpn-server > /tmp/server.log 2>&1 &
+          sleep 4
+          curl -fsS http://127.0.0.1:18090/api/v1/info
+          for i in 1 2 3; do
+            SUB=$(curl -fsS -X POST -d "{\"device\":\"ci$i\"}" http://127.0.0.1:18090/api/v1/register | python3 -c 'import json,sys;print(json.load(sys.stdin)["subscription_url"])')
+            CFG=$(curl -fsS "$SUB")
+            echo "$CFG"
+            # every user must get the working proxy from the folder, never the dead one
+            echo "$CFG" | python3 -c 'import json,sys;p=json.load(sys.stdin)["proxies"][0];assert (p["server"],p["port"],p["username"])==("127.0.0.1",21080,"up"),p'
+          done
+          echo "$CFG" > /tmp/sub.json
+          curl -fsS -H "Authorization: Bearer 0123456789abcdef0123" http://127.0.0.1:18090/api/admin/proxies
+          cat /tmp/server.log
+      - name: End-to-end test of the client config (TUN -> proxy from folder)
+        timeout-minutes: 3
+        run: |
           node -e '
             const m = require("./ui/app.js");
             const p = JSON.parse(require("fs").readFileSync("/tmp/sub.json")).proxies[0];
@@ -64,20 +77,13 @@ jobs:
             const cfg = JSON.parse(m.buildConfig(p));
             // keep the runner reachable for GitHub during the test
             delete cfg.inbounds[0].strict_route;
+            // the upstream proxy runs on this machine as "nobody": keep it out of the TUN
             cfg.inbounds[0].exclude_uid = [65534];
             require("fs").writeFileSync("/tmp/client.json", JSON.stringify(cfg, null, 2));
           '
-          # client and server share this machine: run the server as "nobody" and keep that user out of the TUN,
-          # otherwise the server's own outgoing traffic would loop back into the client
-          pkill -f tainavpn-server || true
-          sleep 1
-          sudo chown -R nobody /tmp/tvpn
-          (sudo -u nobody env TVPN_PUBLIC_HOST=127.0.0.1 TVPN_ADMIN_TOKEN=0123456789abcdef0123 TVPN_DATA_DIR=/tmp/tvpn \
-            TVPN_SOCKS_PORT=21080 TVPN_API_LISTEN=127.0.0.1:18090 ./dist/tainavpn-server > /tmp/server.log 2>&1 &)
-          sleep 2
           finish() {
             code=$?
-            sudo pkill -INT runconfig || true
+            sudo pkill -INT -f "runconfig /tmp/client.json" || true
             sleep 2
             if [ $code -ne 0 ]; then
               echo "::error::client log:%0A$(head -c 6000 /tmp/client.log | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')"
@@ -88,10 +94,11 @@ jobs:
           sudo timeout 90 /tmp/runconfig /tmp/client.json > /tmp/client.log 2>&1 &
           sleep 5
           ip addr | grep -A3 tun || true
-          # no -x flag: traffic is captured by TUN and must go through the SOCKS5 server
+          # no -x flag: traffic is captured by TUN and must go through the upstream proxy
           curl -fsS --max-time 20 https://www.google.com -o /dev/null -w "through tun: %{http_code}\n"
-          sudo pkill -INT runconfig; sleep 2
-          grep -q "outbound/socks\[proxy\]" /tmp/client.log || { echo "::error::traffic did not go through the SOCKS5 outbound"; exit 1; }
+          sudo pkill -INT -f "runconfig /tmp/client.json"; sleep 2
+          grep -q "outbound/socks\[proxy\]" /tmp/client.log || { echo "::error::traffic did not go through the proxy"; exit 1; }
+          grep -q "inbound connection" /tmp/upstream.log || { echo "::error::upstream proxy saw no connections"; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
           name: tainavpn-server-linux-amd64

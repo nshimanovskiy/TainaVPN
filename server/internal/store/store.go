@@ -18,8 +18,7 @@ type User struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	Key       string    `json:"key"`
-	Username  string    `json:"username"`
-	Password  string    `json:"password"`
+	ProxyID   string    `json:"proxy_id,omitempty"` // proxy from the pool assigned to this user
 	Disabled  bool      `json:"disabled"`
 	CreatedAt time.Time `json:"created_at"`
 	LastSeen  time.Time `json:"last_seen,omitempty"`
@@ -30,10 +29,9 @@ type User struct {
 var ErrNotFound = errors.New("user not found")
 
 type Store struct {
-	mu       sync.RWMutex
-	path     string
-	users    map[string]*User
-	onChange func()
+	mu    sync.RWMutex
+	path  string
+	users map[string]*User
 }
 
 func Open(dir string) (*Store, error) {
@@ -55,9 +53,6 @@ func Open(dir string) (*Store, error) {
 	}
 	return s, nil
 }
-
-// OnChange registers a callback fired after credentials change.
-func (s *Store) OnChange(f func()) { s.onChange = f }
 
 func (s *Store) saveLocked() error {
 	list := s.listLocked()
@@ -101,8 +96,6 @@ func (s *Store) Create(name, source string) (User, error) {
 		ID:        id,
 		Name:      name,
 		Key:       randomToken(24),
-		Username:  "u" + id,
-		Password:  randomToken(18),
 		CreatedAt: time.Now().UTC(),
 		Source:    source,
 	}
@@ -112,7 +105,6 @@ func (s *Store) Create(name, source string) (User, error) {
 	if err != nil {
 		return User{}, err
 	}
-	s.changed()
 	return *u, nil
 }
 
@@ -125,9 +117,6 @@ func (s *Store) Delete(id string) error {
 	delete(s.users, id)
 	err := s.saveLocked()
 	s.mu.Unlock()
-	if err == nil {
-		s.changed()
-	}
 	return err
 }
 
@@ -141,27 +130,19 @@ func (s *Store) SetDisabled(id string, disabled bool) error {
 	u.Disabled = disabled
 	err := s.saveLocked()
 	s.mu.Unlock()
-	if err == nil {
-		s.changed()
-	}
 	return err
 }
 
-// RotatePassword issues new SOCKS credentials (the access key stays the same).
-func (s *Store) RotatePassword(id string) error {
+// SetProxy assigns a pool proxy to the user ("" clears the assignment).
+func (s *Store) SetProxy(id, proxyID string) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	u := s.users[id]
 	if u == nil {
-		s.mu.Unlock()
 		return ErrNotFound
 	}
-	u.Password = randomToken(18)
-	err := s.saveLocked()
-	s.mu.Unlock()
-	if err == nil {
-		s.changed()
-	}
-	return err
+	u.ProxyID = proxyID
+	return s.saveLocked()
 }
 
 // ByKey finds a user by access key and records the visit.
@@ -177,12 +158,6 @@ func (s *Store) ByKey(key, ip string) (User, bool) {
 		}
 	}
 	return User{}, false
-}
-
-func (s *Store) changed() {
-	if s.onChange != nil {
-		s.onChange()
-	}
 }
 
 func randomHex(n int) string {

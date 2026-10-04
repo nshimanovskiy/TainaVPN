@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       public_host:
-        description: "Домен/IP VPS для SOCKS5 (используется только при первом деплое, когда .env ещё нет)"
+        description: "Домен API (используется только при первом деплое, когда .env ещё нет)"
         default: "vpn.sdsds.top"
         required: true
 
@@ -30,9 +30,7 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           go mod tidy
-          go build -trimpath -tags "badlinkname,tfogo_checklinkname0" \
-            -ldflags "-s -w -checklinkname=0 -X github.com/sagernet/sing-box/constant.Version=${SINGBOX_VERSION}" \
-            -o deploy/tainavpn-server ./server/cmd/tainavpn-server
+          go build -trimpath -ldflags "-s -w" -o deploy/tainavpn-server ./server/cmd/tainavpn-server
       - name: Prepare SSH
         env:
           SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
@@ -51,9 +49,9 @@ jobs:
         run: |
           SSH="ssh -i ~/.ssh/id_deploy -p ${PORT:-22}"
           # resolve ~ on the server side
-          DIR=$($SSH "$USER@$HOST" "mkdir -p $REMOTE_DIR/data && cd $REMOTE_DIR && pwd")
+          DIR=$($SSH "$USER@$HOST" "mkdir -p $REMOTE_DIR/data $REMOTE_DIR/proxies && cd $REMOTE_DIR && pwd")
           echo "REMOTE_ABS=$DIR" >> $GITHUB_ENV
-          scp -i ~/.ssh/id_deploy -P "${PORT:-22}" deploy/tainavpn-server deploy/Dockerfile deploy/docker-compose.yml deploy/.env.example "$USER@$HOST:$DIR/"
+          scp -i ~/.ssh/id_deploy -P "${PORT:-22}" deploy/tainavpn-server deploy/Dockerfile deploy/docker-compose.yml deploy/.env.example deploy/proxies.example.txt "$USER@$HOST:$DIR/"
       - name: Restart
         env:
           HOST: ${{ secrets.VPS_HOST }}
@@ -75,13 +73,13 @@ jobs:
           fi
           if [ ! -f .env ]; then
             TOKEN=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
-            sed -e "s|^TVPN_PUBLIC_HOST=.*|TVPN_PUBLIC_HOST=$PUBLIC_HOST|" \
-                -e "s|^TVPN_PUBLIC_URL=.*|TVPN_PUBLIC_URL=https://$PUBLIC_HOST|" \
+            sed -e "s|^TVPN_PUBLIC_URL=.*|TVPN_PUBLIC_URL=https://$PUBLIC_HOST|" \
                 -e "s|^TVPN_ADMIN_TOKEN=.*|TVPN_ADMIN_TOKEN=$TOKEN|" .env.example > .env
             chmod 600 .env
             echo "::notice::Создан $REMOTE_DIR/.env. Токен админки: grep ADMIN_TOKEN $REMOTE_DIR/.env"
           fi
-          $DOCKER compose up -d --build
+          [ -e proxies/README.txt ] || cp proxies.example.txt proxies/README.txt
+          $DOCKER compose up -d --build --force-recreate
           sleep 3
           $DOCKER compose ps
           $DOCKER compose logs --tail 20

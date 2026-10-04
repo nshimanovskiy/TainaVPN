@@ -110,15 +110,17 @@ async function httpJSON(method, url, body) {
 function parseProxyLink(text) {
   text = text.trim();
   if (!text) return null;
-  // socks5://user:pass@host:port#name   or   socks://...
-  const m = text.match(/^socks5?h?:\/\/(?:([^:@/]*)(?::([^@/]*))?@)?(\[[^\]]+\]|[^:/#?]+):(\d+)\/?(?:#(.*))?$/i);
-  if (m) {
+  // socks5://user:pass@host:port#name, http://user:pass@host:port, user:pass@host:port
+  const m = text.match(/^(?:(socks5?h?|http):\/\/)?(?:([^:@/]*)(?::([^@/]*))?@)?(\[[^\]]+\]|[^:/#?@]+):(\d+)\/?(?:#(.*))?$/i);
+  if (m && (m[1] || m[2] !== undefined)) {
+    const dec = (x) => { try { return decodeURIComponent(x || ''); } catch { return x || ''; } };
     return {
-      username: decodeURIComponent(m[1] || ''),
-      password: decodeURIComponent(m[2] || ''),
-      server: m[3].replace(/^\[|\]$/g, ''),
-      port: +m[4],
-      name: m[5] ? decodeURIComponent(m[5]) : '',
+      type: m[1] && m[1].toLowerCase() === 'http' ? 'http' : 'socks',
+      username: dec(m[2]),
+      password: dec(m[3]),
+      server: m[4].replace(/^\[|\]$/g, ''),
+      port: +m[5],
+      name: m[6] ? dec(m[6]) : '',
     };
   }
   // host:port:user:pass  or host:port
@@ -126,7 +128,7 @@ function parseProxyLink(text) {
   if (parts.length === 2 || parts.length === 4) {
     const port = +parts[1];
     if (parts[0] && port > 0 && port < 65536) {
-      return { server: parts[0], port, username: parts[2] || '', password: parts[3] || '', name: '' };
+      return { type: 'socks', server: parts[0], port, username: parts[2] || '', password: parts[3] || '', name: '' };
     }
   }
   return null;
@@ -138,10 +140,11 @@ function validProxy(p) {
 
 async function fetchSubscription(url) {
   const data = await httpJSON('GET', url);
-  const list = (data.proxies || []).filter((p) => p.type === 'socks' || !p.type);
+  const list = (data.proxies || []).filter((p) => !p.type || p.type === 'socks' || p.type === 'http');
   if (!list.length) throw new Error('В подписке нет прокси');
   return list.map((p, i) => ({
     name: p.name || data.name || 'Сервер',
+    type: p.type === 'http' ? 'http' : 'socks',
     server: p.server,
     port: +p.port,
     username: p.username || '',
@@ -189,7 +192,9 @@ async function refreshProfile(p) {
 // ---------- sing-box config ----------
 
 function buildConfig(p) {
-  const proxy = { type: 'socks', tag: 'proxy', server: p.server, server_port: +p.port, version: '5' };
+  const proxy = p.type === 'http'
+    ? { type: 'http', tag: 'proxy', server: p.server, server_port: +p.port }
+    : { type: 'socks', tag: 'proxy', server: p.server, server_port: +p.port, version: '5' };
   if (p.username) { proxy.username = p.username; proxy.password = p.password || ''; }
 
   const rules = [
@@ -283,7 +288,7 @@ function renderStatus() {
   pw.className = 'power';
   const p = store.profiles.find((x) => x.id === store.selected);
   let text = 'Отключено';
-  let sub = p ? `${p.name} · ${p.server}:${p.port}` : 'Добавьте прокси';
+  let sub = p ? (p.sub ? p.name : `${p.name} · ${p.server}:${p.port}`) : 'Добавьте прокси';
   switch (status.state) {
     case 'running': pw.classList.add('on'); text = 'Подключено'; break;
     case 'starting': pw.classList.add('busy'); text = 'Подключение…'; break;
@@ -302,7 +307,7 @@ function render() {
       <span class="radio"></span>
       <div class="p-main">
         <div class="p-name">${esc(p.name || p.server)}${p.sub ? '<span class="tag">сервер</span>' : ''}</div>
-        <div class="p-sub">SOCKS5 · ${esc(p.server)}:${esc(p.port)}${p.username ? ' · ' + esc(p.username) : ''}</div>
+        <div class="p-sub">${p.sub ? 'с сервера' : (p.type === 'http' ? 'HTTP' : 'SOCKS5') + ' · ' + esc(p.server) + ':' + esc(p.port) + (p.username ? ' · ' + esc(p.username) : '')}</div>
       </div>
       <div class="p-act">
         ${p.sub ? '<button data-act="refresh" title="Обновить">↻</button>' : ''}
@@ -380,12 +385,14 @@ function bind() {
     if (!p) return;
     $('mHost').value = p.server; $('mPort').value = p.port;
     $('mUser').value = p.username; $('mPass').value = p.password;
+    $('mType').value = p.type;
     if (p.name) $('mName').value = p.name;
   });
 
   $('addManual').onclick = async () => {
     const p = {
       id: uid(),
+      type: $('mType').value,
       name: $('mName').value.trim(),
       server: $('mHost').value.trim(),
       port: +$('mPort').value.trim(),

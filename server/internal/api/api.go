@@ -5,13 +5,14 @@ import (
 	"crypto/subtle"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/nshimanovskiy/tainavpn/server/internal/proxy"
+	"github.com/nshimanovskiy/tainavpn/server/internal/pool"
 	"github.com/nshimanovskiy/tainavpn/server/internal/store"
 )
 
@@ -20,8 +21,6 @@ var adminHTML []byte
 
 type Config struct {
 	Name             string // shown in the app, e.g. "Tainavpn"
-	PublicHost       string // hostname/IP clients connect to for SOCKS
-	SocksPort        int
 	PublicURL        string // https://vpn.example.com (used to build subscription links)
 	AdminToken       string
 	AdminPath        string // e.g. /panel
@@ -32,17 +31,19 @@ type Config struct {
 type API struct {
 	cfg   Config
 	store *store.Store
-	proxy *proxy.Server
+	pool  *pool.Pool
+
+	assignMu sync.Mutex
 
 	rlMu sync.Mutex
 	rl   map[string][]time.Time
 }
 
-func New(cfg Config, st *store.Store, px *proxy.Server) *API {
+func New(cfg Config, st *store.Store, pl *pool.Pool) *API {
 	if cfg.RegisterPerDay <= 0 {
 		cfg.RegisterPerDay = 3
 	}
-	return &API{cfg: cfg, store: st, proxy: px, rl: map[string][]time.Time{}}
+	return &API{cfg: cfg, store: st, pool: pl, rl: map[string][]time.Time{}}
 }
 
 func (a *API) Handler() http.Handler {
@@ -55,7 +56,9 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/admin/users/{id}", a.admin(a.deleteUser))
 	mux.HandleFunc("POST /api/admin/users/{id}/disable", a.admin(a.setDisabled(true)))
 	mux.HandleFunc("POST /api/admin/users/{id}/enable", a.admin(a.setDisabled(false)))
-	mux.HandleFunc("POST /api/admin/users/{id}/rotate", a.admin(a.rotate))
+	mux.HandleFunc("POST /api/admin/users/{id}/reassign", a.admin(a.reassign))
+	mux.HandleFunc("GET /api/admin/proxies", a.admin(a.listProxies))
+	mux.HandleFunc("POST /api/admin/proxies/check", a.admin(a.checkProxies))
 	mux.HandleFunc("GET /api/admin/status", a.admin(a.status))
 	adminPath := "/" + strings.Trim(a.cfg.AdminPath, "/")
 	mux.HandleFunc("GET "+adminPath, func(w http.ResponseWriter, r *http.Request) {
@@ -174,6 +177,45 @@ func (a *API) register(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// load counts active users per assigned proxy.
+func (a *API) load() map[string]int {
+	load := map[string]int{}
+	for _, u := range a.store.List() {
+		if !u.Disabled && u.ProxyID != "" {
+			load[u.ProxyID]++
+		}
+	}
+	return load
+}
+
+// assign returns the user's proxy, (re)assigning one from the pool when the
+// current one is missing from the folder or dead (or when force is set).
+func (a *API) assign(u store.User, force bool) (pool.Proxy, error) {
+	a.assignMu.Lock()
+	defer a.assignMu.Unlock()
+	if !force && u.ProxyID != "" {
+		if px, ok := a.pool.Get(u.ProxyID); ok && px.Usable() {
+			return px, nil
+		}
+	}
+	load := a.load()
+	if u.ProxyID != "" {
+		load[u.ProxyID]--
+	}
+	exclude := ""
+	if force {
+		exclude = u.ProxyID
+	}
+	px, ok := a.pool.Pick(load, exclude)
+	if !ok {
+		return pool.Proxy{}, errors.New("на сервере сейчас нет свободных прокси, попробуйте позже")
+	}
+	if px.ID != u.ProxyID {
+		_ = a.store.SetProxy(u.ID, px.ID)
+	}
+	return px, nil
+}
+
 func (a *API) subscription(w http.ResponseWriter, r *http.Request) {
 	u, ok := a.store.ByKey(r.PathValue("key"), clientIP(r))
 	if !ok {
@@ -184,16 +226,21 @@ func (a *API) subscription(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, 403, "key is disabled")
 		return
 	}
+	px, err := a.assign(u, false)
+	if err != nil {
+		errJSON(w, 503, err.Error())
+		return
+	}
 	writeJSON(w, 200, map[string]any{
 		"version": 1,
 		"name":    a.cfg.Name,
 		"proxies": []any{map[string]any{
 			"name":     a.cfg.Name,
-			"type":     "socks",
-			"server":   a.cfg.PublicHost,
-			"port":     a.cfg.SocksPort,
-			"username": u.Username,
-			"password": u.Password,
+			"type":     px.Type,
+			"server":   px.Host,
+			"port":     px.Port,
+			"username": px.Username,
+			"password": px.Password,
 		}},
 	})
 }
@@ -213,12 +260,23 @@ func (a *API) admin(next http.HandlerFunc) http.HandlerFunc {
 type userView struct {
 	store.User
 	SubscriptionURL string `json:"subscription_url"`
+	Proxy           string `json:"proxy,omitempty"`
+	ProxyAlive      bool   `json:"proxy_alive"`
+}
+
+func (a *API) view(r *http.Request, u store.User) userView {
+	v := userView{User: u, SubscriptionURL: a.baseURL(r) + "/sub/" + u.Key}
+	if px, ok := a.pool.Get(u.ProxyID); ok {
+		v.Proxy = px.Addr()
+		v.ProxyAlive = px.Usable()
+	}
+	return v
 }
 
 func (a *API) listUsers(w http.ResponseWriter, r *http.Request) {
 	list := []userView{}
 	for _, u := range a.store.List() {
-		list = append(list, userView{u, a.baseURL(r) + "/sub/" + u.Key})
+		list = append(list, a.view(r, u))
 	}
 	writeJSON(w, 200, list)
 }
@@ -237,7 +295,7 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, 200, userView{u, a.baseURL(r) + "/sub/" + u.Key})
+	writeJSON(w, 200, a.view(r, u))
 }
 
 func (a *API) deleteUser(w http.ResponseWriter, r *http.Request) {
@@ -258,17 +316,57 @@ func (a *API) setDisabled(disabled bool) http.HandlerFunc {
 	}
 }
 
-func (a *API) rotate(w http.ResponseWriter, r *http.Request) {
-	if err := a.store.RotatePassword(r.PathValue("id")); err != nil {
-		errJSON(w, 404, err.Error())
+func (a *API) reassign(w http.ResponseWriter, r *http.Request) {
+	var target store.User
+	found := false
+	for _, u := range a.store.List() {
+		if u.ID == r.PathValue("id") {
+			target, found = u, true
+		}
+	}
+	if !found {
+		errJSON(w, 404, store.ErrNotFound.Error())
+		return
+	}
+	if _, err := a.assign(target, true); err != nil {
+		errJSON(w, 503, err.Error())
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
+type proxyView struct {
+	pool.Proxy
+	Users int `json:"users"`
+}
+
+func (a *API) listProxies(w http.ResponseWriter, r *http.Request) {
+	load := a.load()
+	list := []proxyView{}
+	for _, px := range a.pool.List() {
+		px.Password = "" // never send passwords to the browser
+		list = append(list, proxyView{px, load[px.ID]})
+	}
+	writeJSON(w, 200, map[string]any{"proxies": list, "errors": a.pool.Errors(), "dir": a.pool.Dir()})
+}
+
+func (a *API) checkProxies(w http.ResponseWriter, r *http.Request) {
+	a.pool.CheckNow()
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
 func (a *API) status(w http.ResponseWriter, r *http.Request) {
-	st := a.proxy.Status()
-	st["public_host"] = a.cfg.PublicHost
-	st["open_registration"] = a.cfg.OpenRegistration
-	writeJSON(w, 200, st)
+	total, alive := 0, 0
+	for _, px := range a.pool.List() {
+		total++
+		if px.Alive {
+			alive++
+		}
+	}
+	writeJSON(w, 200, map[string]any{
+		"proxies_total":     total,
+		"proxies_alive":     alive,
+		"proxies_dir":       a.pool.Dir(),
+		"open_registration": a.cfg.OpenRegistration,
+	})
 }

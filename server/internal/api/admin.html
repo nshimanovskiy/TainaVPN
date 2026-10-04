@@ -41,7 +41,7 @@
 
   <div id="app" hidden>
     <div class="row" style="justify-content:space-between;margin-bottom:12px">
-      <h1>Tainavpn — пользователи прокси</h1>
+      <h1>Tainavpn — пользователи</h1>
       <button class="ghost" id="logout">Выйти</button>
     </div>
     <div class="card">
@@ -56,11 +56,22 @@
     </div>
     <div class="card scroll">
       <table>
-        <thead><tr><th>Имя</th><th>Статус</th><th>Последний вход</th><th>Ссылка</th><th></th></tr></thead>
+        <thead><tr><th>Имя</th><th>Статус</th><th>Прокси</th><th>Последний вход</th><th>Ссылка</th><th></th></tr></thead>
         <tbody id="users"></tbody>
       </table>
     </div>
-    <details class="card"><summary class="muted">Логи sing-box</summary><pre id="logs"></pre></details>
+    <div class="card scroll">
+      <div class="row" style="justify-content:space-between;margin-bottom:8px">
+        <b>Прокси из папки</b>
+        <button class="ghost" id="check">Проверить сейчас</button>
+      </div>
+      <p class="muted" id="dirHint" style="margin:0 0 8px"></p>
+      <table>
+        <thead><tr><th>Прокси</th><th>Тип</th><th>Состояние</th><th>Пользователей</th><th>Файл</th></tr></thead>
+        <tbody id="proxies"></tbody>
+      </table>
+      <pre id="perr" hidden></pre>
+    </div>
   </div>
 </main>
 <script>
@@ -83,25 +94,35 @@ function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;',
 function fmt(t) { if (!t || t.startsWith('0001')) return '—'; return new Date(t).toLocaleString('ru-RU'); }
 
 async function load() {
-  const [users, st] = await Promise.all([api('GET', '/api/admin/users'), api('GET', '/api/admin/status')]);
+  const [users, st, px] = await Promise.all([api('GET', '/api/admin/users'), api('GET', '/api/admin/status'), api('GET', '/api/admin/proxies')]);
   $('login').hidden = true; $('app').hidden = false;
-  $('status').innerHTML = `SOCKS5: <b>${esc(st.public_host)}:${st.port}</b> · ядро sing-box ${esc(st.core_version)} · ` +
-    (st.running ? '<span class="pill on">работает</span>' : '<span class="pill off">не запущен</span>') +
-    (st.error ? ` <span style="color:var(--bad)">${esc(st.error)}</span>` : '') +
+  $('status').innerHTML = `Прокси в пуле: <b>${st.proxies_alive}</b> рабочих из <b>${st.proxies_total}</b>` +
+    (st.proxies_total === 0 ? ' <span style="color:var(--bad)">— добавьте прокси в папку на сервере</span>' : '') +
     ` · саморегистрация из приложения: ${st.open_registration ? 'включена' : 'выключена'}`;
-  $('logs').textContent = st.logs || '—';
+  $('dirHint').innerHTML = `Файлы <code>*.txt</code> в папке <code>proxies</code> рядом с docker-compose.yml, по одному прокси в строке: <code>user:pass@host:port</code>. Изменения подхватываются за 10 секунд.`;
+  $('proxies').innerHTML = px.proxies.map(p => `
+    <tr>
+      <td>${esc(p.host)}:${p.port}<div class="muted" style="font-size:12px">${esc(p.username || 'без логина')}</div></td>
+      <td>${p.type === 'http' ? 'HTTP' : 'SOCKS5'}</td>
+      <td>${!p.checked_at || p.checked_at.startsWith('0001') ? '<span class="pill">проверяется</span>' : p.alive ? '<span class="pill on">работает</span>' : `<span class="pill off">не работает</span><div class="muted" style="font-size:12px">${esc(p.error)}</div>`}</td>
+      <td>${p.users}</td>
+      <td class="muted">${esc(p.file)}:${p.line}</td>
+    </tr>`).join('') || '<tr><td colspan="5" class="muted">Папка пуста</td></tr>';
+  $('perr').hidden = !px.errors.length;
+  $('perr').textContent = px.errors.length ? 'Строки с ошибками:\n' + px.errors.join('\n') : '';
   $('users').innerHTML = users.map(u => `
     <tr>
       <td>${esc(u.name)}<div class="muted" style="font-size:12px">${esc(u.username)} · ${u.source === 'app' ? 'из приложения' : 'вручную'}</div></td>
       <td>${u.disabled ? '<span class="pill off">выключен</span>' : '<span class="pill on">активен</span>'}</td>
+      <td>${u.proxy ? esc(u.proxy) + (u.proxy_alive ? '' : ' <span class="pill off">не работает</span>') : '<span class="muted">выдаётся при подключении</span>'}</td>
       <td>${fmt(u.last_seen)}<div class="muted" style="font-size:12px">${esc(u.last_ip || '')}</div></td>
       <td><button class="ghost" data-copy="${esc(u.subscription_url)}">Копировать</button></td>
       <td><div class="row">
         <button class="ghost" data-act="${u.disabled ? 'enable' : 'disable'}" data-id="${u.id}">${u.disabled ? 'Включить' : 'Выключить'}</button>
-        <button class="ghost" data-act="rotate" data-id="${u.id}" title="Новый пароль SOCKS (клиенту нужно обновить подписку)">Сменить пароль</button>
+        <button class="ghost" data-act="reassign" data-id="${u.id}" title="Выдать другой прокси из папки (применится при следующем подключении)">Другой прокси</button>
         <button class="danger" data-act="delete" data-id="${u.id}">Удалить</button>
       </div></td>
-    </tr>`).join('') || '<tr><td colspan="5" class="muted">Пока нет пользователей</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="6" class="muted">Пока нет пользователей</td></tr>';
 }
 
 $('users').addEventListener('click', async (e) => {
@@ -114,6 +135,8 @@ $('users').addEventListener('click', async (e) => {
     await load();
   } catch (err) { alert(err.message); }
 });
+
+$('check').onclick = async () => { await api('POST', '/api/admin/proxies/check'); $('check').textContent = 'Проверяется…'; setTimeout(() => { $('check').textContent = 'Проверить сейчас'; load().catch(() => {}); }, 9000); };
 
 $('create').onclick = async () => {
   try {

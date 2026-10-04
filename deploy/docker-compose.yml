@@ -4,9 +4,13 @@ services:
     image: tainavpn-server:latest
     container_name: tainavpn
     restart: unless-stopped
-    # host network: SOCKS5 UDP ASSOCIATE needs the real public address,
-    # the API listens on 127.0.0.1 only and is published through nginx
+    # API listens on 127.0.0.1 only and is published through nginx
     network_mode: host
     env_file: .env
+    environment:
+      TVPN_DATA_DIR: /data
+      TVPN_PROXIES_DIR: /proxies
     volumes:
       - ./data:/data
+      # put proxy lists here: *.txt files, one user:pass@host:port per line
+      - ./proxies:/proxies:ro

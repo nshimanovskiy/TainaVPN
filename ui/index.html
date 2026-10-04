@@ -49,9 +49,12 @@
       <button id="addSub" class="btn ghost wide">Добавить по ссылке</button>
     </div>
     <div class="tab-body" data-body="manual" hidden>
-      <input id="mLink" placeholder="socks5://логин:пароль@хост:порт" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <input id="mLink" placeholder="логин:пароль@хост:порт" autocomplete="off" autocapitalize="off" spellcheck="false">
       <p class="hint">или заполните поля</p>
-      <input id="mName" placeholder="Название (необязательно)">
+      <div class="grid2">
+        <input id="mName" placeholder="Название (необязательно)">
+        <select id="mType"><option value="socks">SOCKS5</option><option value="http">HTTP</option></select>
+      </div>
       <div class="grid2">
         <input id="mHost" placeholder="Хост / IP" autocapitalize="off" spellcheck="false">
         <input id="mPort" placeholder="Порт" inputmode="numeric">
