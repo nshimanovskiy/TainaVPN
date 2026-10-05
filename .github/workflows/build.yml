@@ -86,7 +86,7 @@ jobs:
         run: |
           docker run --rm --cap-add NET_ADMIN -e TVPN_KS_TEST=1 -e CORE_TAGS="$CORE_TAGS" \
             -v "$PWD":/src -w /src golang:1.25 \
-            sh -c 'go mod tidy >/dev/null 2>&1; go test -tags "$CORE_TAGS" -ldflags "-checklinkname=0" -run TestKillSwitchLinux -v ./core/'
+            sh -c 'go mod tidy >/dev/null 2>&1; go test -tags "$CORE_TAGS" -ldflags "-checklinkname=0" -run TestKillSwitchLinux -v ./core/ | tee /dev/stderr | grep -q "^--- PASS: TestKillSwitchLinux"'
       - name: Build server
         env:
           CGO_ENABLED: "0"

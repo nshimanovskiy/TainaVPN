@@ -175,7 +175,7 @@ func (a *App) KillSwitch(enable bool, hostsJSON string) error {
 	return nil
 }
 
-func ksError(lang, msg error) string {
+func ksError(lang string, msg error) string {
 	if lang == "ru" {
 		return "Не удалось включить kill switch: " + msg.Error()
 	}
