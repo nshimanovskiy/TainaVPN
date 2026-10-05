@@ -165,6 +165,9 @@ jobs:
           docs = [c for c in calls if c["method"] == "sendDocument"]
           for m in msgs: print("MSG:", m[:120].replace("\n", " | "))
           assert any("Tainavpn" in m for m in msgs), "no welcome"
+          urls = [b.get("url") for c in calls if c["method"] == "sendMessage"
+                  for row in (c.get("reply_markup") or {}).get("inline_keyboard", []) for b in row]
+          assert "https://t.me/SteelProxyBot?start=r_43172017" in urls, "partner button is missing"
           links = [m for m in msgs if "/sub/" in m]
           assert len(links) >= 2, "bot did not send subscription links"
           assert any(d.get("has_file") for d in docs), "app file was not uploaded"

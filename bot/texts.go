@@ -6,18 +6,19 @@ var texts = map[string]map[string]string{
 		"welcome": "👋 Это бот <b>Tainavpn</b>.\n\n" +
 			"Здесь можно получить личную ссылку-подписку и скачать приложение.\n" +
 			"В приложении будут прокси нескольких стран — выбирайте любую.",
-		"btnLink":   "🔗 Моя ссылка-подписка",
-		"btnApp":    "📥 Скачать приложение",
-		"btnHelp":   "❓ Как подключиться",
-		"btnNew":    "🔄 Выпустить новую ссылку",
-		"btnNewYes": "Да, выпустить новую",
-		"btnCancel": "Отмена",
-		"cmdLink":   "Моя ссылка-подписка",
-		"cmdApp":    "Скачать приложение",
-		"cmdHelp":   "Как подключиться",
-		"link":      "🔗 Ваша ссылка-подписка:\n\n<code>%s</code>\n\n(нажмите на ссылку, чтобы скопировать)",
-		"linkNew":   "✅ Выпущена новая ссылка, старая больше не работает:\n\n<code>%s</code>\n\n(нажмите на ссылку, чтобы скопировать)",
-		"countries": "Доступные страны:",
+		"btnLink":    "🔗 Моя ссылка-подписка",
+		"btnApp":     "📥 Скачать приложение",
+		"btnHelp":    "❓ Как подключиться",
+		"btnNew":     "🔄 Выпустить новую ссылку",
+		"btnNewYes":  "Да, выпустить новую",
+		"btnCancel":  "Отмена",
+		"btnPartner": "🛒 Купить свои прокси",
+		"cmdLink":    "Моя ссылка-подписка",
+		"cmdApp":     "Скачать приложение",
+		"cmdHelp":    "Как подключиться",
+		"link":       "🔗 Ваша ссылка-подписка:\n\n<code>%s</code>\n\n(нажмите на ссылку, чтобы скопировать)",
+		"linkNew":    "✅ Выпущена новая ссылка, старая больше не работает:\n\n<code>%s</code>\n\n(нажмите на ссылку, чтобы скопировать)",
+		"countries":  "Доступные страны:",
 		"howTo": "<b>Как подключиться:</b>\n" +
 			"1. Скачайте и установите приложение Tainavpn (кнопка ниже).\n" +
 			"2. В приложении нажмите <b>+ Добавить</b> → <b>По ссылке</b> и вставьте ссылку.\n" +
@@ -46,18 +47,19 @@ var texts = map[string]map[string]string{
 		"welcome": "👋 This is the <b>Tainavpn</b> bot.\n\n" +
 			"Here you can get your personal subscription link and download the app.\n" +
 			"The app will have proxies in several countries — pick any.",
-		"btnLink":   "🔗 My subscription link",
-		"btnApp":    "📥 Download the app",
-		"btnHelp":   "❓ How to connect",
-		"btnNew":    "🔄 Issue a new link",
-		"btnNewYes": "Yes, issue a new one",
-		"btnCancel": "Cancel",
-		"cmdLink":   "My subscription link",
-		"cmdApp":    "Download the app",
-		"cmdHelp":   "How to connect",
-		"link":      "🔗 Your subscription link:\n\n<code>%s</code>\n\n(tap the link to copy it)",
-		"linkNew":   "✅ A new link has been issued, the old one no longer works:\n\n<code>%s</code>\n\n(tap the link to copy it)",
-		"countries": "Available countries:",
+		"btnLink":    "🔗 My subscription link",
+		"btnApp":     "📥 Download the app",
+		"btnHelp":    "❓ How to connect",
+		"btnNew":     "🔄 Issue a new link",
+		"btnNewYes":  "Yes, issue a new one",
+		"btnCancel":  "Cancel",
+		"btnPartner": "🛒 Buy your own proxies",
+		"cmdLink":    "My subscription link",
+		"cmdApp":     "Download the app",
+		"cmdHelp":    "How to connect",
+		"link":       "🔗 Your subscription link:\n\n<code>%s</code>\n\n(tap the link to copy it)",
+		"linkNew":    "✅ A new link has been issued, the old one no longer works:\n\n<code>%s</code>\n\n(tap the link to copy it)",
+		"countries":  "Available countries:",
 		"howTo": "<b>How to connect:</b>\n" +
 			"1. Download and install the Tainavpn app (button below).\n" +
 			"2. In the app tap <b>+ Add</b> → <b>By link</b> and paste the link.\n" +

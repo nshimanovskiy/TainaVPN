@@ -32,6 +32,7 @@ type config struct {
 	secret    string
 	allowed   map[string]bool // telegram ids / lowercase usernames; empty = everyone
 	downloads string
+	partner   string // referral link to a partner bot, shown in the menu; empty = hidden
 }
 
 type bot struct {
@@ -59,6 +60,10 @@ func main() {
 		secret:    env("TVPN_BOT_SECRET", ""),
 		downloads: env("TVPN_DOWNLOADS_DIR", "/downloads"),
 		allowed:   map[string]bool{},
+		partner:   strings.TrimSpace(env("TVPN_BOT_PARTNER_URL", defaultPartnerURL)),
+	}
+	if cfg.partner == "-" {
+		cfg.partner = ""
 	}
 	for _, a := range strings.Split(env("TVPN_BOT_ALLOWED", ""), ",") {
 		if a = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(a), "@")); a != "" {
@@ -280,7 +285,7 @@ func (b *bot) handle(u update) {
 	}
 	switch {
 	case action == "start":
-		b.send(chatID, t["welcome"], mainMenu(t))
+		b.send(chatID, t["welcome"], b.mainMenu(t))
 	case action == "link":
 		b.sendLink(chatID, from, t, false)
 	case action == "new":
@@ -296,18 +301,26 @@ func (b *bot) handle(u update) {
 	case strings.HasPrefix(action, "file:"):
 		b.sendApp(chatID, strings.TrimPrefix(action, "file:"), t)
 	case action == "help":
-		b.send(chatID, t["help"], mainMenu(t))
+		b.send(chatID, t["help"], b.mainMenu(t))
 	default:
-		b.send(chatID, t["welcome"], mainMenu(t))
+		b.send(chatID, t["welcome"], b.mainMenu(t))
 	}
 }
 
-func mainMenu(t map[string]string) [][]button {
-	return [][]button{
+// defaultPartnerURL is the referral link to the partner proxy shop bot.
+// Override with TVPN_BOT_PARTNER_URL in .env ("-" hides the button).
+const defaultPartnerURL = "https://t.me/SteelProxyBot?start=r_43172017"
+
+func (b *bot) mainMenu(t map[string]string) [][]button {
+	kb := [][]button{
 		{{Text: t["btnLink"], CallbackData: "link"}},
 		{{Text: t["btnApp"], CallbackData: "app"}, {Text: t["btnHelp"], CallbackData: "help"}},
 		{{Text: t["btnNew"], CallbackData: "new"}},
 	}
+	if b.cfg.partner != "" {
+		kb = append(kb, []button{{Text: t["btnPartner"], URL: b.cfg.partner}})
+	}
+	return kb
 }
 
 func (b *bot) sendLink(chatID int64, from *user, t map[string]string, rotate bool) {
