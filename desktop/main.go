@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -30,6 +31,7 @@ var AppVersion = "dev"
 // App is exposed to the UI as window.go.main.App.
 type App struct {
 	lang     string
+	ksActive bool
 	ctx      context.Context
 	mu       sync.Mutex
 	instance *core.Instance
@@ -49,9 +51,27 @@ func NewApp() *App {
 	return &App{state: "stopped", logs: core.NewLogBuffer(400), dir: dir}
 }
 
-func (a *App) startup(ctx context.Context) { a.ctx = ctx }
+func (a *App) startup(ctx context.Context) {
+	a.ctx = ctx
+	// a kill switch left by a crash keeps blocking the internet until the user reconnects or unblocks
+	go func() {
+		active := core.KillSwitchActive()
+		a.mu.Lock()
+		a.ksActive = active
+		a.mu.Unlock()
+	}()
+}
 
-func (a *App) shutdown(ctx context.Context) { _ = a.Stop() }
+func (a *App) shutdown(ctx context.Context) {
+	_ = a.Stop()
+	// closing the app on purpose is not a VPN failure: don't leave the internet blocked
+	a.mu.Lock()
+	ks := a.ksActive
+	a.mu.Unlock()
+	if ks {
+		_ = core.DisableKillSwitch()
+	}
+}
 
 func (a *App) Platform() string { return runtime.GOOS }
 
@@ -120,8 +140,46 @@ func (a *App) Stop() error {
 func (a *App) Status() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	data, _ := json.Marshal(map[string]string{"state": a.state, "error": a.lastErr})
+	state := a.state
+	if a.instance == nil && a.ksActive {
+		// the VPN is not running but the kill switch still blocks the internet
+		state = "blocked"
+	}
+	data, _ := json.Marshal(map[string]string{"state": state, "error": a.lastErr})
 	return string(data)
+}
+
+// KillSwitch turns the kill switch on (with the proxy hosts that must stay reachable) or off.
+func (a *App) KillSwitch(enable bool, hostsJSON string) error {
+	if !enable {
+		err := core.DisableKillSwitch()
+		a.mu.Lock()
+		a.ksActive = err != nil && core.KillSwitchActive()
+		a.mu.Unlock()
+		return err
+	}
+	var hosts []string
+	_ = json.Unmarshal([]byte(hostsJSON), &hosts)
+	allow := core.ResolveHosts(append(hosts, "77.88.8.8")) // + the core's own DNS server
+	err := core.EnableKillSwitch(core.KillSwitchOptions{
+		TunName:     "tainavpn",
+		TunPrefixes: []netip.Prefix{netip.MustParsePrefix("172.19.0.0/30"), netip.MustParsePrefix("fdfe:dcba:9876::/126")},
+		AllowIPs:    allow,
+	})
+	if err != nil {
+		return &uiError{ksError(a.lang, err)}
+	}
+	a.mu.Lock()
+	a.ksActive = true
+	a.mu.Unlock()
+	return nil
+}
+
+func ksError(lang, msg error) string {
+	if lang == "ru" {
+		return "Не удалось включить kill switch: " + msg.Error()
+	}
+	return "Could not enable the kill switch: " + msg.Error()
 }
 
 func (a *App) Logs() string { return a.logs.String() }

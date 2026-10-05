@@ -53,6 +53,7 @@ class MainActivity : Activity() {
     private fun handleTestIntent(intent: Intent?) {
         val debuggable = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
         if (!debuggable || intent == null) return
+        if (intent.hasExtra("test_killswitch")) Lang.setKillSwitch(this, intent.getBooleanExtra("test_killswitch", false))
         if (intent.getBooleanExtra("test_connect", false) && VpnService.prepare(this) == null) {
             TainaVpnService.start(this)
         }
@@ -153,6 +154,21 @@ class MainActivity : Activity() {
 
         @JavascriptInterface
         fun updateStatus(): String = Updater.status()
+
+        @JavascriptInterface
+        fun setKillSwitch(on: Boolean) = Lang.setKillSwitch(this@MainActivity, on)
+
+        /** System VPN settings: "Always-on VPN" + "Block connections without VPN". */
+        @JavascriptInterface
+        fun openVpnSettings() {
+            runOnUiThread {
+                try {
+                    startActivity(Intent(android.provider.Settings.ACTION_VPN_SETTINGS))
+                } catch (e: Exception) {
+                    startActivity(Intent(android.provider.Settings.ACTION_WIRELESS_SETTINGS))
+                }
+            }
+        }
 
         @JavascriptInterface
         fun setLang(lang: String) {

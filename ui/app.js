@@ -27,6 +27,8 @@ function androidBridge(A) {
       A.pingAsync(id, JSON.stringify(p));
     }),
     update: async (url, sha) => { A.update(url, sha || ''); },
+    setKillSwitch: async (on) => { A.setKillSwitch(!!on); },
+    openVpnSettings: async () => { A.openVpnSettings(); },
     updateStatus: async () => JSON.parse(A.updateStatus()),
   };
 }
@@ -50,6 +52,7 @@ function desktopBridge() {
     appVersion: () => app().AppVersion(),
     ping: (p) => app().Ping(JSON.stringify(p)),
     update: (url, sha) => app().Update(url, sha || ''),
+    killSwitch: (on, hosts) => app().KillSwitch(!!on, JSON.stringify(hosts || [])),
     updateStatus: async () => JSON.parse(await app().UpdateStatus()),
   };
 }
@@ -70,6 +73,7 @@ function mockBridge() {
     appVersion: async () => '0.0.0',
     ping: async () => { await new Promise((r) => setTimeout(r, 300 + Math.random() * 700)); return Math.round(80 + Math.random() * 900); },
     update: async () => {},
+    killSwitch: async () => {},
     updateStatus: async () => ({ state: 'idle' }),
     version: async () => 'preview',
     http: async (method, url, body) => {
@@ -340,7 +344,7 @@ function buildConfig(p) {
   } else if (store.mode === 'proxy') {
     inbounds = [{ type: 'mixed', tag: 'mixed-in', listen: '127.0.0.1', listen_port: 2080, set_system_proxy: true }];
   } else {
-    inbounds = [{ ...tun, strict_route: true }];
+    inbounds = [{ ...tun, interface_name: 'tainavpn', strict_route: true }];
   }
 
   return JSON.stringify({
@@ -378,6 +382,10 @@ async function connect() {
     if (p.sub) {
       try { cur = await refreshProfile(p); store.selected = cur.id; await save(); render(); } catch (e) { console.warn('refresh failed', e); }
     }
+    if (desktopKillSwitch()) {
+      // before starting: from now on only the VPN and the proxy servers are reachable
+      await Native.killSwitch(true, proxyHosts());
+    }
     await Native.start(buildConfig(cur));
   } catch (e) {
     status = { state: 'stopped', error: String(e.message || e) };
@@ -390,8 +398,41 @@ async function connect() {
 async function disconnect() {
   busy = true;
   try { await Native.stop(); } catch (e) { toast(String(e.message || e)); }
+  // switching off on purpose: lift the kill switch block
+  if (Native.killSwitch && platform !== 'android') { try { await Native.killSwitch(false, []); } catch (e) { toast(String(e.message || e)); } }
   busy = false;
   await pollStatus();
+}
+
+// ---------- kill switch ----------
+
+function desktopKillSwitch() {
+  return platform !== 'android' && store.killSwitch && store.mode !== 'proxy' && !!Native.killSwitch;
+}
+
+function proxyHosts() {
+  return [...new Set(store.profiles.map((p) => String(p.server || '')).filter(Boolean))];
+}
+
+async function unblock() {
+  busy = true;
+  try {
+    if (platform === 'android') await Native.stop();
+    else await Native.killSwitch(false, []);
+  } catch (e) { toast(String(e.message || e)); }
+  busy = false;
+  status = { state: 'stopped', error: '' };
+  await pollStatus();
+}
+
+async function setKillSwitch(on) {
+  store.killSwitch = on;
+  await save();
+  if (platform === 'android') { await Native.setKillSwitch(on).catch(() => {}); return; }
+  try {
+    if (!on) await Native.killSwitch(false, []);
+    else if (status.state === 'running' && store.mode !== 'proxy') await Native.killSwitch(true, proxyHosts());
+  } catch (e) { toast(String(e.message || e)); }
 }
 
 async function pollStatus() {
@@ -522,6 +563,7 @@ function renderStatus() {
     case 'running': pw.classList.add('on'); text = t('connected'); break;
     case 'starting': pw.classList.add('busy'); text = t('connecting'); break;
     case 'stopping': pw.classList.add('busy'); text = t('disconnecting'); break;
+    case 'blocked': pw.classList.add('err'); text = t('blocked'); sub = t('blockedHint'); break;
     default:
       if (status.error) { pw.classList.add('err'); text = t('error'); sub = status.error; }
   }
@@ -529,6 +571,7 @@ function renderStatus() {
   $('statusFlag').hidden = !p || (status.error && status.state === 'stopped');
   if (p) $('statusFlag').src = flagSrc(p.country);
   $('statusSub').textContent = sub;
+  $('unblockBtn').hidden = status.state !== 'blocked';
 }
 
 function render() {
@@ -558,6 +601,10 @@ function applyLang() {
 
 function renderSettings() {
   $('langSel').value = store.lang || 'auto';
+  $('killSwitch').checked = !!store.killSwitch;
+  $('vpnSettings').hidden = platform !== 'android';
+  $('ksHint').textContent = platform === 'android' ? t('ksHintAndroid')
+    : store.mode === 'proxy' ? t('ksHintProxyMode') : t('ksHintDesktop');
   $('serverUrl').value = store.serverUrl || DEFAULT_SERVER;
   $('bypassLan').checked = !!store.bypassLan;
   $('modeBox').hidden = platform === 'android';
@@ -687,10 +734,14 @@ function bind() {
     await save();
     fetchInfo();
   });
+  $('killSwitch').addEventListener('change', async () => { await setKillSwitch($('killSwitch').checked); renderSettings(); });
+  $('vpnSettings').onclick = () => Native.openVpnSettings().catch(() => {});
+  $('unblockBtn').onclick = unblock;
   $('langSel').addEventListener('change', async () => {
     store.lang = $('langSel').value;
     await save();
     applyLang();
+  if (platform === 'android' && Native.setKillSwitch) Native.setKillSwitch(!!store.killSwitch).catch(() => {});
     render();
     renderSettings();
   });
@@ -711,6 +762,7 @@ async function init() {
     if (raw) store = { ...store, ...JSON.parse(raw) };
   } catch (e) { console.warn('bad store', e); }
   applyLang();
+  if (platform === 'android' && Native.setKillSwitch) Native.setKillSwitch(!!store.killSwitch).catch(() => {});
   Native.version().then((v) => { $('version').textContent = v; }).catch(() => {});
   bind();
   render();

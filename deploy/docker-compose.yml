@@ -10,8 +10,11 @@ services:
     environment:
       TVPN_DATA_DIR: /data
       TVPN_PROXIES_DIR: /proxies
+      TVPN_DOWNLOADS_DIR: /downloads
     volumes:
       - ./data:/data
+      # app files for the home page downloads (uploaded by the release workflow)
+      - ./downloads:/downloads:ro
       # put proxy lists here: *.txt files, one user:pass@host:port per line
       - ./proxies:/proxies:ro
 

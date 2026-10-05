@@ -21,6 +21,7 @@
     </button>
     <div id="statusText" class="status" data-i18n="disconnected">Отключено</div>
     <div class="status-line"><img id="statusFlag" class="flag small" alt="" hidden><span id="statusSub" class="status-sub">&nbsp;</span></div>
+    <button id="unblockBtn" class="btn small ghost unblock" data-i18n="unblock" hidden>Разблокировать интернет</button>
   </section>
 
   <div id="updateBar" class="update-bar" hidden>
@@ -103,6 +104,11 @@
       <p class="hint" id="modeHint"></p>
     </div>
     <label class="check"><input type="checkbox" id="bypassLan"> <span data-i18n="bypassLan">Локальная сеть напрямую</span></label>
+    <div class="field">
+      <label class="check"><input type="checkbox" id="killSwitch"> <span data-i18n="killSwitch">Kill switch</span></label>
+      <p class="hint ks-hint" id="ksHint"></p>
+      <button id="vpnSettings" class="btn ghost wide" data-i18n="vpnSettings" hidden>Настройки VPN Android</button>
+    </div>
     <details class="logs"><summary data-i18n="coreLogs">Логи ядра</summary><pre id="logs"></pre></details>
     <button id="checkUpdate" class="btn ghost wide" data-i18n="checkUpdates">Проверить обновления</button>
     <p class="hint" id="version"></p>

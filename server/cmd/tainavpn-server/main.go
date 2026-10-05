@@ -32,12 +32,13 @@ func env(key, def string) string {
 func main() {
 	log.SetFlags(log.LstdFlags)
 	cfg := api.Config{
-		Name:       env("TVPN_NAME", "Tainavpn"),
-		PublicURL:  env("TVPN_PUBLIC_URL", ""),
-		AdminToken: env("TVPN_ADMIN_TOKEN", ""),
-		AdminPath:  env("TVPN_ADMIN_PATH", "/adminadminadmin"),
-		BotSecret:  env("TVPN_BOT_SECRET", ""),
-		BotURL:     botURL(env("TVPN_BOT_TOKEN", "")),
+		Name:         env("TVPN_NAME", "Tainavpn"),
+		PublicURL:    env("TVPN_PUBLIC_URL", ""),
+		AdminToken:   env("TVPN_ADMIN_TOKEN", ""),
+		AdminPath:    env("TVPN_ADMIN_PATH", "/adminadminadmin"),
+		BotSecret:    env("TVPN_BOT_SECRET", ""),
+		DownloadsDir: env("TVPN_DOWNLOADS_DIR", "/downloads"),
+		BotURL:       botURL(env("TVPN_BOT_TOKEN", "")),
 	}
 	if len(cfg.AdminToken) < 16 {
 		log.Fatal("TVPN_ADMIN_TOKEN must be at least 16 characters")

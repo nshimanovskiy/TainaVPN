@@ -21,12 +21,13 @@ import (
 var adminHTML []byte
 
 type Config struct {
-	Name       string // shown in the app, e.g. "Tainavpn"
-	PublicURL  string // https://vpn.example.com (used to build subscription links)
-	AdminToken string
-	AdminPath  string // e.g. /adminadminadmin
-	BotSecret  string // shared secret of the Telegram bot container
-	BotURL     func() string
+	Name         string // shown in the app, e.g. "Tainavpn"
+	PublicURL    string // https://vpn.example.com (used to build subscription links)
+	AdminToken   string
+	AdminPath    string // e.g. /adminadminadmin
+	BotSecret    string // shared secret of the Telegram bot container
+	DownloadsDir string // app files (exe/apk/deb) for the home page downloads
+	BotURL       func() string
 }
 
 type API struct {
@@ -47,6 +48,7 @@ func New(cfg Config, st *store.Store, pl *pool.Pool) *API {
 
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
+	a.siteRoutes(mux)
 	mux.HandleFunc("GET /api/v1/info", a.info)
 	mux.HandleFunc("POST /api/v1/geo", a.geo)
 	mux.HandleFunc("GET /sub/{key}", a.subscription)

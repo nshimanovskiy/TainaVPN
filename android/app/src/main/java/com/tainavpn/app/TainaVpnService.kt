@@ -103,11 +103,34 @@ class TainaVpnService : VpnService() {
             } catch (e: Exception) {
                 Log.e(TAG, "start failed", e)
                 VpnState.error = e.message ?: e.toString()
-                VpnState.state = "stopped"
-                closeTun()
-                stopForegroundCompat()
-                stopSelf()
+                if (Lang.killSwitch(this)) {
+                    blockTraffic()
+                } else {
+                    VpnState.state = "stopped"
+                    closeTun()
+                    stopForegroundCompat()
+                    stopSelf()
+                }
             }
+        }
+    }
+
+    /**
+     * Kill switch: the VPN couldn't start, so keep (or create) the tunnel without anything
+     * reading from it — all traffic is captured and dropped instead of leaking past the proxy.
+     */
+    private fun blockTraffic() {
+        try {
+            try { Tainacore.stop() } catch (_: Exception) {}
+            if (tun == null) host.openTun()
+            VpnState.state = "blocked"
+            showNotification(blocked = true)
+        } catch (e: Exception) {
+            Log.e(TAG, "kill switch failed", e)
+            VpnState.state = "stopped"
+            closeTun()
+            stopForegroundCompat()
+            stopSelf()
         }
     }
 
@@ -150,7 +173,7 @@ class TainaVpnService : VpnService() {
         else @Suppress("DEPRECATION") stopForeground(true)
     }
 
-    private fun showNotification() {
+    private fun showNotification(blocked: Boolean = false) {
         val nm = getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= 26) {
             nm.createNotificationChannel(
@@ -168,7 +191,7 @@ class TainaVpnService : VpnService() {
         val n = builder
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle("Tainavpn")
-            .setContentText(Lang.get(this, "notifText"))
+            .setContentText(Lang.get(this, if (blocked) "notifBlocked" else "notifText"))
             .setContentIntent(open)
             .setOngoing(true)
             .addAction(Notification.Action.Builder(null, Lang.get(this, "disconnect"), stop).build())

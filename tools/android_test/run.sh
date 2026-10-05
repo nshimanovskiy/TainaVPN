@@ -62,6 +62,28 @@ for V in $VARIANTS; do
   sleep 5
 done
 
+# ---- kill switch: the core can't start -> traffic must be blocked, not leaked ----
+if [ "${KS_TEST:-0}" = 1 ]; then
+  echo '{"inbounds":[{"type":"tun"' > /tmp/broken.json   # invalid config on purpose
+  adb push /tmp/broken.json /data/local/tmp/config.json >/dev/null
+  adb shell "run-as $PKG sh -c 'cat /data/local/tmp/config.json > files/config.json'"
+  adb shell am start -W -n $PKG/.MainActivity --ez test_killswitch true --ez test_connect true >/dev/null
+  sleep 10
+  r=$(adb shell "ping -c 1 -W 5 example.com 2>&1" | head -1)
+  vpn=$(adb shell dumpsys connectivity | grep -c "VPN CONNECTED")
+  if echo "$r" | grep -q "PING example.com (" ; then
+    echo "::error::kill switch: traffic NOT blocked when the core failed ($r)"; overall=1
+  elif [ "$vpn" -lt 1 ]; then
+    echo "::error::kill switch: VPN interface is not up (traffic would leak)"; overall=1
+  else
+    echo "::notice::kill switch: internet blocked while the core is down ($r)"
+  fi
+  adb shell am start -n $PKG/.MainActivity --ez test_killswitch false --ez test_disconnect true >/dev/null
+  sleep 6
+  r=$(adb shell "ping -c 1 -W 5 example.com 2>&1" | head -1)
+  if echo "$r" | grep -q "PING example.com ("; then echo "::notice::kill switch: internet back after disconnect"; else echo "::error::internet still blocked after disconnect: $r"; overall=1; fi
+fi
+
 adb shell dumpsys notification --noredact > $OUT/notifications.txt 2>&1
 if grep -qiE "private.?dns" $OUT/notifications.txt; then
   echo "::error::Android shows the 'Private DNS server cannot be accessed' notification ($PDNS_MODE)"

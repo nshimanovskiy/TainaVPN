@@ -64,6 +64,8 @@ button { font: inherit; cursor: pointer; }
 .ping.mid { color: var(--warn); background: rgba(245,179,62,.1); }
 .ping.bad { color: var(--bad); background: rgba(255,93,108,.1); }
 .ping.wait { color: var(--muted); }
+.unblock { margin-top: 12px; }
+.ks-hint { text-align: left; }
 .update-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: rgba(79,140,255,.1); border: 1px solid rgba(79,140,255,.35); border-radius: 12px; padding: 10px 12px; margin-bottom: 14px; font-size: 14px; }
 .update-bar span { overflow-wrap: anywhere; }
 .empty { text-align: center; color: var(--muted); padding: 18px 0; }
