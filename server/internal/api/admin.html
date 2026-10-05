@@ -103,7 +103,7 @@ async function load() {
   px.proxies = px.proxies || []; px.errors = px.errors || [];
   $('proxies').innerHTML = px.proxies.map(p => `
     <tr>
-      <td>${esc(p.label)}${p.country_manual ? ' <span class="muted" style="font-size:12px">(задана)</span>' : ''}</td>
+      <td>${esc(p.label)}${p.country_manual ? ' <span class="muted" style="font-size:12px">(задана)</span>' : p.country && p.country_source !== 'ipinfo.io' ? ' <span class="muted" style="font-size:12px" title="ipinfo.io не ответил, страна определена через ' + esc(p.country_source || '?') + '; будет перепроверена">(не проверено ipinfo.io)</span>' : ''}</td>
       <td>${esc(p.host)}:${p.port}<div class="muted" style="font-size:12px">${esc(p.username || 'без логина')}</div></td>
       <td>${p.type === 'http' ? 'HTTP' : 'SOCKS5'}</td>
       <td>${!p.checked_at || p.checked_at.startsWith('0001') ? '<span class="pill">проверяется</span>' : p.alive ? '<span class="pill on">работает</span>' : `<span class="pill off">не работает</span><div class="muted" style="font-size:12px">${esc(p.error)}</div>`}</td>

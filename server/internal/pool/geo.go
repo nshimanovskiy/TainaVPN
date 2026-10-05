@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -15,26 +16,58 @@ import (
 	"time"
 )
 
+// IPInfoToken is an optional ipinfo.io access token (TVPN_IPINFO_TOKEN).
+// Without it ipinfo.io still answers, with a lower request limit.
+var IPInfoToken string
+
+// SourceIPInfo marks countries confirmed by ipinfo.io.
+const SourceIPInfo = "ipinfo.io"
+
 // DetectCountry finds the country of the proxy's exit IP by making a request
 // through the proxy to public geo-IP services.
 func DetectCountry(px Proxy, timeout time.Duration) (string, error) {
+	c, _, err := DetectCountrySource(px, timeout)
+	return c, err
+}
+
+// DetectCountrySource is DetectCountry that also tells which service answered.
+// ipinfo.io is the source of truth; the others are used only when it fails
+// (rate limit, blocked), and such answers are re-checked with ipinfo.io later.
+func DetectCountrySource(px Proxy, timeout time.Duration) (country, source string, err error) {
 	client := &http.Client{Timeout: timeout, Transport: transportVia(px, timeout)}
+	ipinfo := "https://ipinfo.io/json"
+	if IPInfoToken != "" {
+		ipinfo += "?token=" + url.QueryEscape(IPInfoToken)
+	}
 	var lastErr error
 	for _, svc := range []struct {
+		name  string
 		url   string
 		field string
 	}{
-		{"https://api.country.is/", "country"},
-		{"http://ip-api.com/json/?fields=status,countryCode", "countryCode"},
-		{"https://ipwho.is/?fields=country_code", "country_code"},
+		{SourceIPInfo, ipinfo, "country"},
+		{"country.is", "https://api.country.is/", "country"},
+		{"ip-api.com", "http://ip-api.com/json/?fields=status,countryCode", "countryCode"},
+		{"ipwho.is", "https://ipwho.is/?fields=country_code", "country_code"},
 	} {
 		c, err := fetchCountry(client, svc.url, svc.field)
 		if err == nil {
-			return c, nil
+			return c, svc.name, nil
 		}
-		lastErr = err
+		if svc.name == SourceIPInfo {
+			log.Printf("pool: ipinfo.io via %s: %v", px.Addr(), redactToken(err))
+		}
+		lastErr = redactToken(err)
 	}
-	return "", lastErr
+	return "", "", lastErr
+}
+
+// redactToken keeps the ipinfo.io token out of logs and API errors.
+func redactToken(err error) error {
+	if err == nil || IPInfoToken == "" || !strings.Contains(err.Error(), IPInfoToken) {
+		return err
+	}
+	return errors.New(strings.ReplaceAll(err.Error(), IPInfoToken, "***"))
 }
 
 func fetchCountry(client *http.Client, u, field string) (string, error) {

@@ -42,6 +42,7 @@ type Proxy struct {
 	Line       int       `json:"line"`
 	Country    string    `json:"country,omitempty"`        // ISO code, "" if unknown
 	CountrySet bool      `json:"country_manual,omitempty"` // set in the file, not detected
+	CountryBy  string    `json:"country_source,omitempty"` // service that detected the country
 	Alive      bool      `json:"alive"`
 	CheckedAt  time.Time `json:"checked_at,omitempty"`
 	Error      string    `json:"error,omitempty"`
@@ -70,6 +71,7 @@ type Pool struct {
 
 type geoEntry struct {
 	Country string    `json:"country"`
+	Source  string    `json:"source,omitempty"` // service that answered; ipinfo.io is the reference
 	At      time.Time `json:"at"`
 }
 
@@ -189,7 +191,7 @@ func (p *Pool) reload() bool {
 			px.Alive, px.CheckedAt, px.Error = old.Alive, old.CheckedAt, old.Error
 		}
 		if !px.CountrySet {
-			px.Country = p.geo[px.ID].Country
+			px.Country, px.CountryBy = p.geo[px.ID].Country, p.geo[px.ID].Source
 		}
 	}
 	p.geoMu.Unlock()
@@ -224,12 +226,15 @@ func (p *Pool) checkAll() {
 			defer wg.Done()
 			defer func() { <-sem }()
 			err := Check(px, 8*time.Second)
-			country := ""
+			country, source := "", ""
 			if err == nil && !px.CountrySet && p.needGeo(px.ID) {
-				if c, gerr := DetectCountry(px, 15*time.Second); gerr == nil {
-					country = c
+				if c, src, gerr := DetectCountrySource(px, 15*time.Second); gerr == nil {
+					country, source = c, src
 					p.geoMu.Lock()
-					p.geo[px.ID] = geoEntry{Country: c, At: time.Now()}
+					if old := p.geo[px.ID]; old.Country != "" && old.Country != c {
+						log.Printf("pool: country of %s changed %s -> %s (%s)", px.Addr(), old.Country, c, src)
+					}
+					p.geo[px.ID] = geoEntry{Country: c, Source: src, At: time.Now()}
 					geoChanged = true
 					p.geoMu.Unlock()
 				} else {
@@ -245,7 +250,7 @@ func (p *Pool) checkAll() {
 					cur.Error = err.Error()
 				}
 				if country != "" {
-					cur.Country = country
+					cur.Country, cur.CountryBy = country, source
 				}
 			}
 			p.mu.Unlock()
@@ -260,12 +265,19 @@ func (p *Pool) checkAll() {
 	}
 }
 
-// needGeo reports whether the proxy's country is unknown or older than a day.
+// needGeo reports whether the proxy's country must be (re)checked: unknown,
+// not confirmed by ipinfo.io yet (retried hourly), or older than a day.
 func (p *Pool) needGeo(id string) bool {
 	p.geoMu.Lock()
 	defer p.geoMu.Unlock()
 	e, ok := p.geo[id]
-	return !ok || e.Country == "" || time.Since(e.At) > 24*time.Hour
+	if !ok || e.Country == "" {
+		return true
+	}
+	if e.Source != SourceIPInfo {
+		return time.Since(e.At) > time.Hour || e.Source == ""
+	}
+	return time.Since(e.At) > 24*time.Hour
 }
 
 func (p *Pool) List() []Proxy {

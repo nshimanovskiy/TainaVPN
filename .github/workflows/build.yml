@@ -142,6 +142,9 @@ jobs:
             [ -n "$C" ] && break; sleep 2
           done
           echo "detected country: $C"
+          S=$(curl -fsS -H "Authorization: Bearer 0123456789abcdef0123" http://127.0.0.1:18090/api/admin/proxies | python3 -c 'import json,sys;print(" ".join(p.get("country_source","") for p in json.load(sys.stdin)["proxies"] if p["username"]=="up"))')
+          echo "country source: $S"
+          [ "$S" = "ipinfo.io" ] || echo "::warning::country was not confirmed by ipinfo.io (rate limit on the runner?)"
           [ -n "$C" ] || { echo "::error::country was not detected"; cat /tmp/server.log; exit 1; }
           CFG=$(curl -fsS "$SUB")
           echo "$CFG" | python3 -c 'import json,sys;p=json.load(sys.stdin)["proxies"];print(p);assert len(p)==1 and p[0]["country"] and p[0]["name"].split()[1]'
