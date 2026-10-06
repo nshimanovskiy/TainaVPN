@@ -6,7 +6,14 @@ set -u
 BIN=$1; PY=$2; PLAT=$3; SUDO=${4:-}
 W=$(mktemp -d); cd "$W"
 CURL=curl; [ "$PLAT" = windows ] && CURL=curl.exe
-fail() { echo "::error::$*"; echo "--- upstream log ---"; cat up.log 2>/dev/null; for f in out*.log; do echo "--- $f ---"; cat "$f"; done; $SUDO "$BIN" --selftest-unblock unblock.log >/dev/null 2>&1; exit 1; }
+fail() {
+  for f in out*.log; do waitfor "$f" DONE 40; done # the self-test writes its core log when it stops
+  { echo "--- upstream log ---"; tail -n 30 up.log 2>/dev/null; for f in out*.log; do echo "--- $f ---"; tail -c 5000 "$f"; done; } > fail.txt
+  echo "::error::$*"
+  # the log as an annotation too (readable without downloading the job log)
+  echo "::error title=details::$(sed 's/%/%25/g' fail.txt | sed ':a;N;$!ba;s/\n/%0A/g' | sed 's/\r//g')"
+  $SUDO "$BIN" --selftest-unblock unblock.log >/dev/null 2>&1; exit 1
+}
 
 # the purchased proxy stand-in: SOCKS5 with a password on this machine
 "$PY" "$GITHUB_WORKSPACE/tools/android_test/socks5_server.py" 21080 up pp > up.log 2>&1 &
