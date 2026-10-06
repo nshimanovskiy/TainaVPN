@@ -9,7 +9,7 @@ CURL=curl; [ "$PLAT" = windows ] && CURL=curl.exe
 "$PY" "$GITHUB_WORKSPACE/tools/android_test/socks5_server.py" 21080 up pp > up.log 2>&1 &
 sleep 2
 summary=""
-for v in asis no_ifname no_strict gvisor system no_ifname_no_strict; do
+for v in asis asis2 mixed mixed_fw system_fw; do
   node -e '
     const m = require(process.env.GITHUB_WORKSPACE + "/ui/app.js");
     const p = { type: "socks", server: "127.0.0.1", port: 21080, username: "up", password: "pp" };
@@ -18,11 +18,16 @@ for v in asis no_ifname no_strict gvisor system no_ifname_no_strict; do
     const t = cfg.inbounds[0], v = process.argv[2];
     if (v.includes("no_ifname")) delete t.interface_name;
     if (v.includes("no_strict")) delete t.strict_route;
-    if (v === "gvisor" || v === "system") t.stack = v;
+    if (v.startsWith("mixed")) t.stack = "mixed";
+    if (v.startsWith("system")) t.stack = "system";
     cfg.route.rules.splice(0, 0, { process_path_regex: ["(?i)python"], outbound: "direct" });
     require("fs").writeFileSync("cfg.json", JSON.stringify(cfg, null, 2));
   ' "$PLAT" "$v"
   rm -f out.log
+  if [ "$PLAT" = windows ]; then
+    netsh advfirewall firewall delete rule name=tvpn-test >/dev/null 2>&1
+    case $v in *_fw) netsh advfirewall firewall add rule name=tvpn-test dir=in action=allow program="$(cygpath -w "$BIN")" enable=yes >/dev/null ;; esac
+  fi
   $SUDO "$BIN" --selftest cfg.json out.log 14 &
   for _ in $(seq 1 30); do grep -qE "RUNNING|FAILED" out.log 2>/dev/null && break; sleep 1; done
   sleep 3
