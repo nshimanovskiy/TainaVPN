@@ -28,7 +28,7 @@ node -e '
   m._setStore({ profiles: [p], bypassLan: true, mode: "tun" }, process.argv[1]);
   const cfg = JSON.parse(m.buildConfig(p));
   if (!cfg.inbounds[0].strict_route || cfg.inbounds[0].interface_name !== "tainavpn") throw new Error("unexpected config");
-  cfg.route.rules.splice(2, 0, { process_path_regex: ["(?i)python"], outbound: "direct" });
+  cfg.route.rules.splice(0, 0, { process_path_regex: ["(?i)python"], outbound: "direct" });
   require("fs").writeFileSync("cfg.json", JSON.stringify(cfg, null, 2));
 ' "$PLAT" || fail "config"
 
