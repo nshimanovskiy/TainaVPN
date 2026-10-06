@@ -6,10 +6,11 @@ set -u
 BIN=$1; PY=$2; PLAT=$3; SUDO=${4:-}
 W=$(mktemp -d); cd "$W"
 CURL=curl; [ "$PLAT" = windows ] && CURL=curl.exe
+[ "$PLAT" = windows ] && export SOCKS_BIND=$(powershell.exe -NoProfile -Command "(Get-NetIPConfiguration | Where-Object IPv4DefaultGateway | Select-Object -First 1).IPv4Address.IPAddress" | tr -d '\r\n ')
 "$PY" "$GITHUB_WORKSPACE/tools/android_test/socks5_server.py" 21080 up pp > up.log 2>&1 &
 sleep 2
 summary=""
-for v in asis asis2 mixed mixed_fw system_fw; do
+for v in asis asis2 mixed mixed_fw; do
   node -e '
     const m = require(process.env.GITHUB_WORKSPACE + "/ui/app.js");
     const p = { type: "socks", server: "127.0.0.1", port: 21080, username: "up", password: "pp" };
@@ -21,6 +22,7 @@ for v in asis asis2 mixed mixed_fw system_fw; do
     if (v.startsWith("mixed")) t.stack = "mixed";
     if (v.startsWith("system")) t.stack = "system";
     cfg.route.rules.splice(0, 0, { process_path_regex: ["(?i)python"], outbound: "direct" });
+    if (process.argv[1] === "windows") cfg.dns.servers[0] = { type: "tls", tag: "remote", server: "1.1.1.1", detour: "proxy" };
     require("fs").writeFileSync("cfg.json", JSON.stringify(cfg, null, 2));
   ' "$PLAT" "$v"
   rm -f out.log

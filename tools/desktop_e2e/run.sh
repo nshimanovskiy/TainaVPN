@@ -15,7 +15,12 @@ fail() {
   $SUDO "$BIN" --selftest-unblock unblock.log >/dev/null 2>&1; exit 1
 }
 
-# the purchased proxy stand-in: SOCKS5 with a password on this machine
+# the purchased proxy stand-in: SOCKS5 with a password on this machine. On Windows it sends
+# from the physical interface address, so its own traffic stays out of the VPN
+if [ "$PLAT" = windows ]; then
+  export SOCKS_BIND=$(powershell.exe -NoProfile -Command "(Get-NetIPConfiguration | Where-Object IPv4DefaultGateway | Select-Object -First 1).IPv4Address.IPAddress" | tr -d '\r\n ')
+  echo "proxy stand-in sends from $SOCKS_BIND"
+fi
 "$PY" "$GITHUB_WORKSPACE/tools/android_test/socks5_server.py" 21080 up pp > up.log 2>&1 &
 sleep 2
 $CURL -fsS --max-time 15 -x socks5h://up:pp@127.0.0.1:21080 https://1.1.1.1/cdn-cgi/trace -o /dev/null || fail "upstream proxy does not work"
@@ -29,6 +34,9 @@ node -e '
   const cfg = JSON.parse(m.buildConfig(p));
   if (!cfg.inbounds[0].strict_route || cfg.inbounds[0].interface_name !== "tainavpn") throw new Error("unexpected config");
   cfg.route.rules.splice(0, 0, { process_path_regex: ["(?i)python"], outbound: "direct" });
+  // strict_route on Windows blocks port 53 outside the VPN for other apps, which includes the
+  // stand-in proxy here (with a real remote proxy this does not apply): use DNS-over-TLS in the test
+  if (process.argv[1] === "windows") cfg.dns.servers[0] = { type: "tls", tag: "remote", server: "1.1.1.1", detour: "proxy" };
   require("fs").writeFileSync("cfg.json", JSON.stringify(cfg, null, 2));
 ' "$PLAT" || fail "config"
 

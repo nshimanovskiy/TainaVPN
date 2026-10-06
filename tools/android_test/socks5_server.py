@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Minimal SOCKS5 proxy (username/password, CONNECT only) for CI tests.
 Logs every CONNECT target to stdout. Usage: socks5_server.py PORT USER PASS"""
-import socket, struct, sys, threading
+import os, socket, struct, sys, threading
 
 PORT, USER, PASS = int(sys.argv[1]), sys.argv[2].encode(), sys.argv[3].encode()
 
@@ -54,7 +54,10 @@ def handle(c):
         if cmd != 1:
             c.sendall(b"\x05\x07\x00\x01" + b"\x00" * 6); return
         try:
-            r = socket.create_connection((host, port), timeout=10)
+            # SOCKS_BIND: send from this local address (the physical interface), so a VPN
+            # test on the same machine doesn't route the proxy's own traffic into the VPN
+            bind = os.environ.get("SOCKS_BIND")
+            r = socket.create_connection((host, port), timeout=10, source_address=(bind, 0) if bind and ":" not in host else None)
             r.settimeout(None)
         except OSError as e:
             print(f"  failed: {e}", flush=True)
