@@ -8,6 +8,7 @@ W=$(mktemp -d); cd "$W"
 CURL=curl; [ "$PLAT" = windows ] && CURL=curl.exe
 [ "$PLAT" = windows ] && export SOCKS_BIND=$(powershell.exe -NoProfile -Command "(Get-NetIPConfiguration | Where-Object IPv4DefaultGateway | Select-Object -First 1).IPv4Address.IPAddress" | tr -d '\r\n ')
 "$PY" "$GITHUB_WORKSPACE/tools/android_test/socks5_server.py" 21080 up pp > up.log 2>&1 &
+UP=$!
 sleep 2
 summary=""
 for v in asis asis2 mixed mixed_fw; do
@@ -52,4 +53,6 @@ echo "::notice title=TUN variants ($PLAT)::$summary"
 # core log of the unchanged config, filtered
 echo "::notice title=core log asis ($PLAT)::$(grep -vE 'DEBUG|python' out_asis.log | grep -iE 'error|warn|tun|route|start' | head -40 | sed 's/%/%25/g' | sed 's/\x1b\[[0-9;]*m//g' | tr -d '\r' | sed ':a;N;$!ba;s/\n/%0A/g')"
 echo "::notice title=upstream log ($PLAT)::$(sort up.log | uniq -c | sort -rn | head -15 | tr -d '\r' | sed ':a;N;$!ba;s/\n/%0A/g')"
+kill "$UP" 2>/dev/null; [ "$PLAT" = windows ] && taskkill //F //IM python.exe >/dev/null 2>&1
+netsh advfirewall firewall delete rule name=tvpn-test >/dev/null 2>&1
 exit 0
