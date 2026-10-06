@@ -334,19 +334,16 @@ function buildConfig(p) {
     address: ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'],
     mtu: 9000,
     auto_route: true,
-    stack: 'mixed',
+    // gvisor everywhere: with the "system"/"mixed" TCP stack connections are handed to a local
+    // listener, which a firewall can block (Windows Firewall did: connected, but no internet),
+    // and Android's own DNS-over-TLS client (Private DNS) could not connect at all
+    stack: 'gvisor',
   };
   let inbounds;
-  if (platform === 'android') {
-    // gvisor: with the "system"/"mixed" TCP stack Android's own DNS-over-TLS client (Private DNS)
-    // can't connect through the tunnel and all name resolution breaks (reproduced on an emulator)
-    inbounds = [{ ...tun, stack: 'gvisor' }];
-  } else if (platform === 'windows' && store.mode !== 'proxy') {
-    // gvisor: the "system"/"mixed" TCP stack hands connections to a local listener that
-    // Windows Firewall blocks for an unknown app, so TCP through the VPN timed out (no internet)
-    inbounds = [{ ...tun, stack: 'gvisor', interface_name: 'tainavpn', strict_route: true }];
-  } else if (store.mode === 'proxy') {
+  if (store.mode === 'proxy' && platform !== 'android') {
     inbounds = [{ type: 'mixed', tag: 'mixed-in', listen: '127.0.0.1', listen_port: 2080, set_system_proxy: true }];
+  } else if (platform === 'android') {
+    inbounds = [tun];
   } else {
     inbounds = [{ ...tun, interface_name: 'tainavpn', strict_route: true }];
   }
