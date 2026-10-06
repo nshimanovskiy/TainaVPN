@@ -359,7 +359,9 @@ function buildConfig(p) {
         { type: 'udp', tag: 'local', server: '77.88.8.8' },
       ],
       final: 'remote',
-      strategy: 'prefer_ipv4',
+      // desktop: purchased proxies are usually IPv4-only, and Windows prefers IPv6 when the
+      // VPN has an IPv6 address, so AAAA answers made sites try IPv6 first and fail through the proxy
+      strategy: platform === 'android' ? 'prefer_ipv4' : 'ipv4_only',
       reverse_mapping: true,
     },
     inbounds,

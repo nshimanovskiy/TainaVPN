@@ -48,8 +48,8 @@ echo "== 1. VPN (TUN) without kill switch"
 $SUDO "$BIN" --selftest cfg.json out1.log 25 &
 waitfor out1.log RUNNING 40 || fail "VPN did not start"
 sleep 3
-$CURL -fsS --max-time 20 https://1.1.1.1/cdn-cgi/trace -o /dev/null || fail "no internet through the VPN (IP)"
-$CURL -fsS --max-time 20 https://www.cloudflare.com/cdn-cgi/trace -o /dev/null || fail "no internet through the VPN (domain / DNS)"
+$CURL -fsS --max-time 20 https://1.1.1.1/cdn-cgi/trace -o /dev/null 2> curl_err.txt || fail "no internet through the VPN (IP): $(tr -d '\r\n' < curl_err.txt)"
+$CURL -fsS --max-time 20 https://www.cloudflare.com/cdn-cgi/trace -o /dev/null 2> curl_err.txt || fail "no internet through the VPN (domain / DNS): $(tr -d '\r\n' < curl_err.txt)"
 grep -q "CONNECT 1.1.1.1:443" up.log || fail "traffic did not go through the proxy"
 waitfor out1.log DONE 60 || fail "VPN did not stop"
 $CURL -fsS --max-time 20 https://1.1.1.1/cdn-cgi/trace -o /dev/null || fail "no internet after disconnect"
