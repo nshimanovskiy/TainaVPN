@@ -237,6 +237,10 @@ jobs:
           go build -trimpath -tags "desktop,production,${CORE_TAGS}" \
             -ldflags "-s -w -H windowsgui -checklinkname=0 -X main.AppVersion=${VERSION} -X github.com/sagernet/sing-box/constant.Version=${SINGBOX_VERSION}" \
             -o "dist/Tainavpn-${VERSION}-windows-x64.exe" ./desktop
+      - name: End-to-end test of the app (TUN, kill switch) on Windows
+        timeout-minutes: 8
+        shell: bash
+        run: bash tools/desktop_e2e/run.sh "$PWD/dist/Tainavpn-${VERSION}-windows-x64.exe" python windows
       - uses: actions/upload-artifact@v4
         with:
           name: windows
@@ -266,6 +270,9 @@ jobs:
           go build -trimpath -tags "desktop,production,webkit2_41,${CORE_TAGS}" \
             -ldflags "-s -w -checklinkname=0 -X main.AppVersion=${VERSION} -X github.com/sagernet/sing-box/constant.Version=${SINGBOX_VERSION}" \
             -o build/tainavpn ./desktop
+      - name: End-to-end test of the app (TUN, kill switch) on Ubuntu
+        timeout-minutes: 8
+        run: bash tools/desktop_e2e/run.sh "$PWD/build/tainavpn" python3 linux sudo
       - name: Package .deb
         run: |
           P=pkg
