@@ -237,6 +237,11 @@ jobs:
           go build -trimpath -tags "desktop,production,${CORE_TAGS}" \
             -ldflags "-s -w -H windowsgui -checklinkname=0 -X main.AppVersion=${VERSION} -X github.com/sagernet/sing-box/constant.Version=${SINGBOX_VERSION}" \
             -o "dist/Tainavpn-${VERSION}-windows-x64.exe" ./desktop
+      - name: TUN diagnostics on Windows (config variants)
+        timeout-minutes: 8
+        shell: bash
+        continue-on-error: true
+        run: bash tools/desktop_e2e/variants.sh "$PWD/dist/Tainavpn-${VERSION}-windows-x64.exe" python windows
       - name: End-to-end test of the app (TUN, kill switch) on Windows
         timeout-minutes: 8
         shell: bash
